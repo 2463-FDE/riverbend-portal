@@ -485,6 +485,123 @@ def agent_eligibility(req: AgentTurnRequest):
     }
 
 
+# =========================================================================== #
+# W4 — the assembled patient view.
+#
+# The gateway resolves the AuthorizedScope and passes it as plain data. This
+# service does NOT decide who may see what; it receives a scope and assembles
+# within it. That split is deliberate: authorization lives at the one place that
+# owns sessions, and the graph's own authorize node is defence in depth.
+# =========================================================================== #
+_view_graph = None
+
+
+def get_view_graph():
+    global _view_graph
+    if _view_graph is None:
+        import patient_view_graph
+        import patient_view_loaders
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        _view_graph = patient_view_graph.build_graph(
+            loaders=patient_view_loaders.default_loaders(_lookup_eligibility),
+            # A durable, encrypted checkpointer in production: a run paused at
+            # the sensitivity gate holds assembled PHI until a human answers.
+            checkpointer=(
+                __import__("eligibility_agent").build_checkpointer()[0]
+                if settings.agent_durable_memory else InMemorySaver()
+            ),
+        )
+    return _view_graph
+
+
+class ScopeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    principal: str = "patient"
+    username: str = ""
+    patient_ids: list[int] = Field(default_factory=list)
+    open_to_context: bool = False
+
+
+class PatientViewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    patient_id: int
+    scope: ScopeIn
+    requested_domains: Optional[list[str]] = None
+    cross_patient: bool = False
+    thread_id: Optional[str] = None
+
+
+class ViewResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    patient_id: int
+    thread_id: str
+    approved: bool
+
+
+@app.post("/patient-view")
+def patient_view(req: PatientViewRequest):
+    import patient_view_graph
+
+    rid = uuid.uuid4().hex[:12]
+    view = patient_view_graph.run(
+        get_view_graph(),
+        patient_id=req.patient_id,
+        scope=req.scope.model_dump(),
+        requested_domains=req.requested_domains,
+        cross_patient=req.cross_patient,
+        thread_id=req.thread_id or f"view-{rid}",
+    )
+    log.info(
+        "patient_view rid=%s authorized=%s released=%s sensitive=%s domains=%d path=%s",
+        rid, view.authorized, view.released, view.sensitive,
+        len(view.domains), ">".join(view.path),
+    )
+    return {"request_id": rid, "thread_id": req.thread_id or f"view-{rid}",
+            **_view_payload(view)}
+
+
+@app.post("/patient-view/resume")
+def patient_view_resume(req: ViewResumeRequest):
+    """Resume a run paused at the sensitivity gate (HITL)."""
+    import patient_view_graph
+
+    rid = uuid.uuid4().hex[:12]
+    view = patient_view_graph.resume(
+        get_view_graph(), approved=req.approved,
+        patient_id=req.patient_id, thread_id=req.thread_id,
+    )
+    log.info("patient_view_resume rid=%s approved=%s released=%s",
+             rid, req.approved, view.released)
+    return {"request_id": rid, "thread_id": req.thread_id, **_view_payload(view)}
+
+
+def _view_payload(view) -> dict:
+    return {
+        "patient_id": view.patient_id,
+        "authorized": view.authorized,
+        "released": view.released,
+        "summary": view.summary,
+        "grounded": view.grounded,
+        "domains": view.domains,
+        "deny_reason": view.deny_reason,
+        "sensitive": view.sensitive,
+        "approved": view.approved,
+        "path": view.path,
+    }
+
+
+@app.get("/graph/stats")
+def graph_stats(patient_ids: str = ""):
+    """Knowledge-graph shape for an authorized id set. Demo/inspection only."""
+    import patient_view_loaders
+
+    ids = [int(p) for p in patient_ids.split(",") if p.strip().isdigit()]
+    if not ids:
+        return {"error": "patient_ids required"}
+    return patient_view_loaders.build_graph_for(ids).stats()
+
+
 def _stub_summary(instructions: str) -> str:
     """A GROUNDED stub: derived from the instructions, so dev output is faithful.
 

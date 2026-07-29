@@ -240,3 +240,37 @@ def test_L5_live_agent_calls_its_single_tool(monkeypatch):
           f"overridden={turn.overridden}\n     {turn.reply[:200]}")
     assert turn.tool_called, "the agent answered without calling its tool"
     assert turn.tool_status == "active"
+
+
+# --------------------------------------------------------------------------- #
+# L6 — the patient-view synthesis, one real call
+# --------------------------------------------------------------------------- #
+@skip_no_key
+def test_L6_live_patient_view_synthesis_is_grounded(monkeypatch):
+    """One real synthesis over seeded, ALREADY-AUTHORIZED material.
+
+    Note what this does not test: authorization. That is deterministic and runs
+    before the model, which is the point of the design — there is nothing about
+    it for a live model to get wrong.
+    """
+    _require_langchain_aws()
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    pvg = load_module("services/ai-orchestrator/patient_view_graph.py", "live_pvg")
+    loaders = load_module("services/ai-orchestrator/patient_view_loaders.py", "live_pvl")
+    monkeypatch.setattr(pvg.settings, "use_stub", False)
+
+    graph = pvg.build_graph(loaders=loaders.default_loaders(),
+                            checkpointer=InMemorySaver())
+    view = pvg.run(
+        graph, patient_id=1042,
+        scope={"principal": "patient", "patient_ids": [1042, 1330, 1588],
+               "open_to_context": False},
+        thread_id="live-view-1",
+    )
+    print(f"\n[L6] authorized={view.authorized} released={view.released} "
+          f"grounded={view.grounded}\n     {view.summary[:300]}")
+    assert view.authorized and view.released
+    assert view.grounded, (
+        f"live synthesis failed the grounding check — inspect the output above"
+    )

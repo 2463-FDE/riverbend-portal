@@ -15,9 +15,9 @@ this is the document that becomes the Week-10 handoff package.
 | D9 | Live credentials committed to the repo | **partial** | W1 | Tracking fixed W1; **rotation outstanding** | `DB_PASSWORD` is direct access to every chart, bypassing every app control |
 | D4 | Synchronous payer call, no timeout or breaker, on the intake path | open | — | W3 | A payer outage stops patient registration |
 | D5 | No MPI / match key → one patient, several charts | **named + measured** | W2 | ADR 0007 (design only) | **Patient safety:** clinician opens a chart with an empty allergy list for a patient with a documented penicillin allergy |
-| D8 | N+1 queries + full-table scan on records search | open | — | W4 (measured) | Latency scales badly with chart volume |
-| D10 | Sessions never expire; no automatic logoff | open | — | W9 | Shared clinical workstations; walk-away exposure |
-| D11 | IDOR on chart reads; sequential ids | open | — | W4 | Any authenticated user can walk the whole patient table |
+| D8 | N+1 queries + full-table scan on records search | **named + measured** | W4 | roadmap | Slowest for the patients clinicians look at most |
+| D10 | Sessions never expire; no automatic logoff | **named** | W4 | W9 | Shared clinical workstations; walk-away exposure. Deploying W4 needs a session flush *because* of this. |
+| D11 | IDOR on chart reads; sequential ids | **fixed** (patient side) | W4 | **W4 — gateway route + scope binding** | Any authenticated user could walk the whole patient table. Closed. |
 | D13 | PHI to an LLM vendor with no BAA | **avoided by design** | W1 | W1 (by construction) + `RVB-X-09` | Would have been an unsignalled breach |
 | D2, D6, D7, D12, D14 | audit-log mutability, HL7 mapping loss, role bloat, ROI authorization, breach detection | open | — | W6–W10 | Not yet assessed |
 
@@ -153,3 +153,65 @@ Staff free-text contains patient names, and regex scrubbing does not catch names
 therefore requires **both** an explicit flag and a key — a stale ambient env flag
 cannot start shipping prompt bodies off-box. Enabling it needs a BAA covering the
 trace vendor, or name detection on this path.
+
+---
+
+## Week 4 detail
+
+### D11 / twist #9 — IDOR on chart reads → `fixed` (patient side)
+`docs/handover/portal.har` shows one session fetching `/api/patients/1042/records`
+→ 200 and then `/api/patients/1043/records` → 200. Two different humans' charts,
+sequential integer ids, one login.
+
+**It was not a forgotten `if`.** `require_session` answered "is someone logged
+in?" and could never answer "is this the right someone?", because `users` had no
+reference to a patient and the session carried none. "Let patients see their OWN
+records" was not expressible in the schema.
+
+Fixed in three parts: a nullable `users.patient_id` with a unique partial index
+(migration 009), the binding carried into the session **server-derived**, and an
+`AuthorizedScope` resolved at the gateway **before proxying**. Denials return
+**404, not 403** — a 403 on a real id and a 404 on a nonexistent one is an
+enumeration oracle.
+
+A patient's scope includes charts linked by `SAME_AS`, so the W2 fragmentation
+does not become a W4 access denial: Maria must be able to see the chart carrying
+her own penicillin allergy.
+
+**Full finding:** `docs/findings/w4-idor-record-access.md` · **ADR:** `adr/0011`
+
+**Not fixed:** staff scope remains coarse (D7, W9). The gate narrows which
+PATIENT, not which staff role.
+
+### D8 — N+1 and full-table scan → `named + measured`
+One query per encounter to assemble a chart; `records/search` is a full-table
+`ILIKE` with no index and no `LIMIT`. Measured via
+`scripts/measure_n_plus_one.py`: 11 queries at 10 encounters, 101 at 100. The
+system is slowest for the patients with the longest histories — backwards from
+every clinical priority. Roughly a day to fix, in a different service; scheduled
+separately so it does not obscure the authorization review.
+**Full finding:** `docs/findings/w4-n-plus-one.md`
+
+### D10 — sessions never expire → `named`, and it affects the W4 deploy
+No TTL on the Redis session key; `auth.yaml` says `SESSION_TIMEOUT: never`. The
+realistic threat is a shared clinical workstation and a walk-away, not an
+attacker. 164.312(a)(2)(iii) names automatic logoff specifically.
+
+**Deployment note:** tokens issued before W4 carry no `patient_id` and resolve as
+staff principals. That is the safe direction, but it means **a deploy of W4
+should flush existing sessions** — and doing that is awkward precisely BECAUSE
+sessions never expire.
+**Full finding:** `docs/findings/w4-no-automatic-logoff.md`
+
+### New in W4 — a bug worth recording, caught by its own test
+The graph traversal was depth-first, which marks a node `seen` at whatever depth
+it is popped at rather than its shortest path. That silently dropped
+`record:1330:1` — the chart carrying the penicillin allergy — from a traversal
+rooted at chart 1042. The Week-2 failure, re-created inside the Week-4 fix, and
+failing the same way: quietly, with a plausible-looking result. Fixed by using
+BFS, which visits every node at its minimum depth.
+
+Similarly, the HITL `cross_patient` flag was not declared in the graph's state
+schema, so LangGraph dropped it and the sensitivity gate never fired while every
+other test still passed. A control that fails open without any error is the worst
+kind; both are now pinned by tests.

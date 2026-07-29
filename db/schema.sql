@@ -19,8 +19,17 @@ CREATE TABLE IF NOT EXISTS users (
     role          TEXT NOT NULL DEFAULT 'staff',   -- single role for everyone
     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- W4 / adr/0011. Patient-portal accounts point at their own chart; NULL for
+    -- staff. Server-derived at login and carried in the session -- a request can
+    -- never assert its own patient identity. Without this column, "let patients
+    -- see their OWN records" was not expressible, which is the real shape of D11.
+    patient_id    INTEGER REFERENCES patients(id)
 );
+-- Two logins for one patient row would make "who viewed this patient?" (W10)
+-- unanswerable, because a read could not be attributed to a person.
+CREATE UNIQUE INDEX IF NOT EXISTS users_patient_id_uniq
+    ON users (patient_id) WHERE patient_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Patients

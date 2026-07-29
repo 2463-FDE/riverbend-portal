@@ -15,3 +15,17 @@ roles:
 # Every account maps to "staff": front desk, billing, ROI clerks, clinicians.
 default_role: staff
 mfa_required: false
+
+  # W4 / adr/0011. Patient-portal accounts. A `patient` principal is scoped to
+  # its OWN chart plus any chart linked by SAME_AS (the W2 fragmentation), and
+  # cannot read another patient's record or full-text search the corpus.
+  #
+  # Note what this does NOT do: `staff` is still one blanket role, so the gate
+  # narrows WHICH PATIENT, not which staff role. D7 remains open (W9), and
+  # describing this as least-privilege would be exactly the self-assertion we
+  # flagged in the README.
+  patient:
+    description: A patient viewing their own record through the portal.
+    permissions:
+      - own_record.read
+      - own_appointments.read
