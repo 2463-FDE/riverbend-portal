@@ -181,7 +181,7 @@ All offline, deterministic, zero-spend. The payer is a controllable fake.
 | 3 | `test_new_visit_starts_clean` | A different `thread_id` sees no prior state | W3-02 |
 | 4 | `test_encrypted_serde_selected_in_prod` | Production flag → `EncryptedSerializer`; dev → plain `InMemorySaver` | W3-03 |
 | 5 | `test_eligibility_call_is_bounded` | A payer that never responds returns within the total budget | W3-04 |
-| 6 | `test_eligibility_call_does_not_block_loop` | The call is awaited; a concurrent request is served during a slow payer call | W3-04 |
+| 6 | `test_intake_does_not_invoke_blocking_eligibility` | **The property, not a proxy for it.** With the payer hung, `POST /intake` completes **and** the blocking eligibility call site is never invoked on that path (call-site spy asserts zero invocations). An earlier draft asserted only "the call is awaited and a concurrent request is served," which a still-coupled intake path could pass. | W3-04 |
 | 7 | `test_breaker_opens_after_threshold` | 5 consecutive failures → state `open` | W3-05 |
 | 8 | `test_breaker_short_circuits_while_open` | While open, **zero** payer calls are attempted | W3-05 |
 | 9 | `test_breaker_half_open_probe` | After cooldown, exactly one probe is admitted | W3-05 |
@@ -196,9 +196,11 @@ All offline, deterministic, zero-spend. The payer is a controllable fake.
 | 18 | `test_tracing_disabled_without_flag_and_key` | Tracing off unless both present; env with a stale flag alone does not enable it | W3-12 |
 | 19 | `test_no_phi_in_agent_logs` | A name-bearing question produces no log record containing the name | W3-12 |
 | 20 | `test_w1_w2_modules_unmodified` | This PR does not modify the W1 model client or the W2 index port | — |
+| 21 | **`test_e2e_staff_chat_through_gateway`** | Log in → a staff chat turn through the gateway → the agent invokes `check_eligibility` and returns a status the front desk can act on. Stub model, faked payer, zero spend. **The client-visible feature, proven.** | **W3-14** |
 
 **Live tier:** `L4 test_live_agent_single_tool_call` — one real agent turn against
 Bedrock with a faked payer; asserts a tool call occurred and cost is under ceiling.
+Gated behind `L0` (retention preflight).
 
 ---
 

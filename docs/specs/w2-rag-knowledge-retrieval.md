@@ -122,7 +122,7 @@ Failing both → refuse. A refusal is a successful outcome, not an error.
 | `context_recall` | fraction of gold-relevant chunks retrieved in top-k |
 | `context_precision` | fraction of retrieved chunks that are gold-relevant |
 | `groundedness` | fraction of generated answers passing the grounding check |
-| `answer_match` | fraction of answers containing the gold answer's key facts |
+| `answer_match` | fraction of `key_facts` present in the answer, averaged over queries. **The gold-set schema carries an explicit `key_facts: [str]` per query**; matching is on normalized tokens (casefold, stem, strip punctuation). Defined here so it cannot drift into string-matching theatre — "contains the key facts" without a schema is untestable. |
 
 These are the numbers she expects. They will look **fine**.
 
@@ -176,7 +176,43 @@ belongs on the roadmap, per `RVB-X-06`):
 
 ---
 
-## 5. Ingest as a privileged action (`RVB-W2-10`, HITL point 1)
+## 4b. The index is a PHI store — two collections, not one scrub
+
+The client's ask is retrieval over **patient history**. That means patient PHI in
+the vector index is inherent to the feature, not an accident to be scrubbed away.
+An earlier draft applied `scrub_document` — which deliberately preserves dates,
+phone and email — to the patient corpus. Those are Safe-Harbor identifiers under
+164.514(b)(2), so that draft would have leaked identifiers into Chroma while
+appearing to have a control.
+
+The fix is not a harsher scrub. A patient corpus stripped of dates cannot answer
+*"what did her last three visits say?"* — it would destroy the feature to protect
+it. The honest design declares what the index is:
+
+| Path | Collection | Scrub | Query |
+|---|---|---|---|
+| `ingest_document` | `riverbend_knowledge` — clinic policy, procedures, plans | lenient (`scrub_document`): SSN / MRN / long opaque IDs only; dates and clinic contact preserved because they are the document's content | open to any authenticated session |
+| `ingest_record` | **`riverbend_records` — declared a PHI store** | direct identifiers stripped where not needed for retrieval; clinical content preserved | **patient-scoped filter, mandatory** — a query carries the authorized patient id set and Chroma filters on it |
+
+Consequences, stated rather than assumed:
+
+- `riverbend_records` inherits the same obligations as the Postgres PHI columns: access control, audit on read, and the encryption-at-rest posture (which is D3 — currently *not* met, and now met in one more place than before, which is worth naming honestly rather than claiming the index is safer than the database).
+- A patient-scoped query is the same shape as W4's `AuthorizedScope`. They use the same scope object, so there is one definition of "which patients may this caller see," not two.
+- Passing a patient record through `ingest_document` is a **type error**, not a judgement call.
+
+## 5. Ingest as a privileged action (`RVB-W2-10`, `RVB-W2-13`, HITL point 1)
+
+**The mechanism, concretely** — the brownfield has one `staff` role, so
+`knowledge_admin` needs an implementation, not just a name:
+
+- `KNOWLEDGE_INGEST_USERS` — env-driven username allowlist.
+- `KNOWLEDGE_INGEST_ROLES` — role allowlist, so it keeps working once real roles land in W9.
+- A session may ingest if its username **or** its role appears on the respective list.
+- `/me` returns `can_ingest` so the portal shows or hides the surface without guessing policy client-side — the gateway stays the single authority.
+
+Explicitly an **interim control** until the W9 RBAC split. Recorded as such so it
+is not mistaken for least-privilege.
+
 
 Adding a document to the knowledge base silently changes every future grounded
 answer, for every user, indefinitely — and the poisoned answers still carry
@@ -207,7 +243,7 @@ All offline, deterministic, zero-spend.
 | 9 | `test_graph_takes_refuse_edge` | With relevance below floor, the graph traverses `relevance_gate → refuse` and **never** reaches `generate` | W2-05 |
 | 10 | `test_graph_ground_gate_withdraws_answer` | An ungrounded generation is withdrawn at `ground_gate` and returned as a refusal | W2-05 |
 | 11 | `test_eval_reports_four_standard_metrics` | `context_recall`, `context_precision`, `groundedness`, `answer_match` all present | W2-06 |
-| 12 | `test_eval_persists_across_restart` | `GET /eval/latest` returns the last run after a process restart | W2-06 |
+| 12 | `test_eval_latest_returns_last_run` | `GET /eval/latest` returns the last run in-process. **Cross-restart persistence cut** (rescue R17 scope trim) — a run re-executes in seconds against the sampled corpus, so durability bought nothing for the week's budget. | W2-06 |
 | 13 | **`test_fragmented_patient_lowers_fragment_coverage`** | Seeded 3-fragment patient → `fragment_coverage < 1.0` for a query answered from one fragment | **W2-07** |
 | 14 | **`test_duplicate_rate_detects_seeded_fork`** | `duplicate_patient_rate > 0` and the three Maria Gonzalez IDs appear in `identity_split_examples` | **W2-07** |
 | 15 | **`test_recall_high_while_coverage_low`** | The scenario that proves the point: `context_recall >= 0.8` **and** `fragment_coverage <= 0.5` in the same run | **W2-07** |
@@ -216,9 +252,15 @@ All offline, deterministic, zero-spend.
 | 18 | `test_scrub_document_before_index` | An SSN in a submitted document never reaches the index | W2-10 |
 | 19 | `test_corpus_cap_enforced_and_logged` | Ingest beyond the configured cap is refused and the cap is logged | W2-11 |
 | 20 | `test_w1_model_client_unmodified` | `git diff` on the W1 model-client module across this PR is empty — the W2 abstraction did not leak backwards (debate D2 condition) | W2-01 |
+| 21 | **`test_record_corpus_uses_phi_collection`** | `ingest_record` writes to `riverbend_records`, never `riverbend_knowledge`; passing a patient record to `ingest_document` raises a type error | **W2-10** |
+| 22 | **`test_patient_scoped_query_isolation`** | A query carrying patient A's scope cannot retrieve any chunk belonging to patient B, at any `k` | **W2-10** |
+| 23 | `test_knowledge_admin_allowlist` | Allowlisted username → 200; allowlisted role → 200; neither → 403; `/me` reports `can_ingest` accurately in all three cases | W2-13 |
+| 24 | `test_import_boundary_chroma` | No module outside the Chroma adapter imports `chromadb` or `langchain_chroma` | W2-01 |
+| 25 | **`test_e2e_knowledge_query_through_gateway`** | Log in → seed → `POST /ai/knowledge/query` with a chart-shaped clinical question → cited results return. Stub model, zero spend. **The client-visible feature, proven.** | **W2-14** |
 
 **Live tier:** `L3 test_live_titan_embeddings_dimension` — one real Titan call,
 asserts vector length equals configured dims and asserts cost below ceiling.
+Gated behind `L0` (retention preflight).
 
 ---
 

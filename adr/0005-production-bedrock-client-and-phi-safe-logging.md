@@ -134,6 +134,7 @@ body construction — both replaced by `ChatBedrockConverse`.
 
 - The board demo ships and is defensible: no PHI in the prompt by construction, bounded cost and latency, validated output, an audit trail of AI calls with no bodies in it.
 - Real Bedrock use still requires an executed AWS BAA and credentials supplied by IAM role or short-term key. A long-term key in `.env` is a **demo** posture, recorded as such (ADR 0004, AWS documents long-term keys as "recommended only for exploration").
+- **The retention preflight is a hard gate, added after the codex:rescue review.** The service refuses to serve unless the Bedrock effective data-retention mode is `none` and the configured model's `allowed_modes` contains `none`. A model requiring `provider_data_share` would share prompts and completions with the provider for up to 30 days — recreating debt D13 through the front door. See ADR 0004 §1a; requirement `RVB-X-09`.
 - Grounding checks are heuristic and offline by design — no extra model calls, runs on every commit. Weaker than Bedrock's managed check; deliberately the floor, not the ceiling.
 - D1 is fixed **on the AI path only**. `intake-service` still logs request bodies; that is named, not fixed, and belongs with W7's instrumentation work.
 - D3 remains open (W9). The README's compliance claim is now contradicted in writing by our own findings doc, which is the point.

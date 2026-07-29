@@ -71,12 +71,33 @@ authorize → plan → Send()⇉ {demographics, encounters, labs, coverage}
           → merge → sensitivity_gate →(interrupt?)→ synthesize → ground_gate
 ```
 
-**`langgraph-supervisor` is rejected.** Pinned at **0.0.31, last released
-2025-11-19** — before LangGraph 1.0 shipped — with no release since. A production
-dependency on a 0.0.x package predating the runtime's GA is not defensible, and
-this topology is roughly forty lines of `StateGraph`. A test asserts the package
-is absent from requirements, so the rejection is enforced rather than merely
-documented.
+**`langgraph-supervisor` is rejected — on architecture, not on compatibility.**
+
+An earlier draft of this ADR rejected it on the claim that 0.0.31 predates
+LangGraph 1.0. **That claim was wrong and the codex:rescue review caught it.**
+Verified on PyPI, 2026-07-29: LangGraph `1.0.0` released **2025-10-17**;
+`langgraph-supervisor` `0.0.31` released **2025-11-19** — a month *after* — and it
+declares `langgraph>=1.0.2,<2.0.0` and `langchain-core>=1.0.0,<2.0.0`. It **is**
+v1-compatible.
+
+The real reason stands on its own and is stronger:
+
+> **A supervisor delegates routing to a model. This design requires a
+> deterministic authorization edge that runs before any retriever. Model-decided
+> routing actively fights that invariant.**
+
+The whole safety argument below is that the agentic part is strictly *downstream*
+of a gate the model cannot influence. A supervisor abstraction inverts that — it
+puts a model at the top of the graph, deciding what runs. We would spend the week
+constraining it back into determinism, and every future contributor would have to
+re-derive why the supervisor is not allowed to route freely.
+
+Secondary, and honestly secondary: it is a `0.0.x` package with no release in
+eight months. That is a maintenance signal, not a compatibility problem, and it
+would not have been sufficient on its own.
+
+A test asserts the package is absent from requirements, so the rejection is
+enforced rather than merely documented.
 
 ### 2. The invariant — agents never make authorization decisions
 
@@ -85,6 +106,14 @@ Three mechanical properties, each independently tested:
 1. **`authorize` is the first node and every path to a retriever passes through
    it.** It is a plain function: session → `AuthorizedScope`. No model, no prompt,
    no tool. Instrumented retrievers assert the ordering on every run.
+
+   **Precondition, missing until now:** this requires the session to *carry a
+   patient identity*, and it does not. `services/gateway/security.py` stores only
+   `username` and `role`, and every user holds the single `staff` role. The
+   codex:rescue review caught that the entire authorization design rested on a
+   claim the codebase could not satisfy. **ADR 0011** adds the session → patient
+   binding that makes `AuthorizedScope` derivable; it is a hard dependency of this
+   ADR and lands in the same PR.
 2. **Branches receive `AuthorizedScope`, never the caller's raw request.** `Send`
    payloads carry the narrowed scope. A retriever cannot widen what it never saw.
 3. **Every retriever re-asserts scope at the data layer.** Defence in depth: a
@@ -142,7 +171,7 @@ are unauditable by definition.
 
 ## Consequences
 
-- The IDOR is closed **on the new path**, with a permanent regression test that reproduces the HAR walk against the legacy path and fails loudly if anyone removes the check.
+- The IDOR is closed **on the existing `GET /patients/{id}/records` route at the gateway**, not merely on the new assembler. An earlier draft protected only the new path while leaving the walked route open, and claimed D11 "fixed" — a paper fix the rescue review rejected. The regression test asserts the HAR walk is now **denied**; the pre-fix reproduction is preserved as evidence in the findings doc, not as a test that enshrines the bug.
 - The feature the client asked for is delivered as an **expansion** — "assemble the full picture *safely, from four systems, degrading per-domain*" — and the writeup says explicitly that we expanded it rather than pretending she asked.
 - Authorization logic lives in one node instead of being scattered across every query. That is a real maintainability gain and also a single point of failure; it is therefore the most-tested code in the week.
 - We now run four retrievals per view where the legacy path ran one N+1 loop. The N+1 is **measured and named, not fixed** (D8) — fixing it is a records-service change outside this week's scope.

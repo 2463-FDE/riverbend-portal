@@ -19,9 +19,12 @@ obvious objection is that a graph adds a modelling layer over a working join.
 ```
 (Patient)-[:HAD]->(Encounter)-[:WITH]->(Provider)
                       │
-                      └-[:PRODUCED]->(Record {kind, status, source_message_id})
+                      └-[:PRODUCED]->(Record {kind, status})
 (Patient)-[:COVERED_BY]->(Coverage {payer, status, checked_at, stale})
 (Patient)-[:SAME_AS]->(Patient)
+
+# Proposed, W6 (requires a migration — see §2b):
+#   (Record {source_message_id})
 ```
 
 ### 2. Why a graph and not the join we already have
@@ -38,12 +41,20 @@ has to remember, in every query, forever — and someone forgot it once, in
 an authorized root is a property of the traversal itself; there is no clause to
 forget. This is the reason that justifies the layer on its own.
 
-**b. Provenance is an edge property.**
-`Record.source_message_id` on the `PRODUCED` edge records which inbound HL7
+**b. Provenance is an edge property — *proposed*, not built in W4.**
+`Record.source_message_id` on the `PRODUCED` edge would record which inbound HL7
 message produced which record. That matters in W6, where the mapper is shown to
 silently drop AL1 (allergy) and RXA (medication) segments — "which records came
 from a message we mis-parsed, and what is therefore missing from this chart?" is a
 traversal, and it is unanswerable in the current schema.
+
+**The rescue review caught that this column does not exist.** `db/schema.sql`'s
+`records` table has no `source_message_id`, so a W4 loader depending on it would
+have failed at implementation time. The migration belongs in **W6**, where the HL7
+work actually needs it. W4 builds the graph without provenance, and this reason is
+therefore a *justification for the model*, not a capability shipped this week. It
+is listed second because it is the argument that survives into W6, not the one
+that carries W4.
 
 **c. `SAME_AS` makes W2's finding operational before the merge exists.**
 Maria Gonzalez's three fragments become one traversal. ADR 0007 deliberately

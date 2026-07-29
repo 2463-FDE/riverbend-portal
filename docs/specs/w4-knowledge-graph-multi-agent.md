@@ -93,6 +93,34 @@ demographics encounters labs      coverage          │  parallel, isolated
 dependency on a 0.0.x package that predates the runtime's GA is not defensible,
 and this topology is ~40 lines of `StateGraph` (ADR 0009).
 
+### 2.0 The missing precondition — session identity binding
+
+**The rescue review found that the authorization design could not be implemented
+against this codebase.** `services/gateway/security.py` stores only `username` and
+`role` in the session; `users` has no patient reference; every account is `staff`.
+There was no patient identity to authorize against. "Session for patient 1042" was
+a test we could not have written.
+
+That is the real shape of D11: the missing ownership check is a *symptom*; the
+cause is that the system never modelled **who a login belongs to**. `require_session`
+could not have been fixed by adding a comparison, because there was nothing to
+compare.
+
+**ADR 0011** adds the minimum binding — nullable `users.patient_id` with a unique
+partial index, carried into the session at login, exposed on `/me`,
+**server-derived and never client-supplied**. From it:
+
+| Principal | `AuthorizedScope.patient_ids` |
+|---|---|
+| **Patient** (`patient_id IS NOT NULL`) | own id **+ ids reachable by `SAME_AS`** — so a fragmented human sees their whole record |
+| **Staff** (`patient_id IS NULL`) | the patient in context, subject to a treatment-relationship check. **Deliberately coarse this week** — with one `staff` role, real minimum-necessary is impossible; that is D7 and W9's work. Stated, not oversold. |
+
+**The existing route is fixed, not just the new assembler.** `GET /patients/{id}`
+and `GET /patients/{id}/records` resolve the scope and reject at the gateway
+*before proxying* — that is the route the HAR walk used. Out-of-scope returns
+**404, not 403**: a 403 on valid ids and 404 on invalid ones is an enumeration
+oracle that confirms which patient ids exist.
+
 ### 2.1 The invariant that makes this defensible
 
 > **Agents never make authorization decisions.**
@@ -198,17 +226,40 @@ All offline, deterministic, zero-spend.
 | 10 | `test_resume_false_blocks_release` | `Command(resume=False)` → no assembled view returned | W4-05 |
 | 11 | `test_resume_true_releases` | `Command(resume=True)` → view returned | W4-05 |
 | 12 | `test_interrupt_state_survives_process_restart` | With a durable checkpointer, a paused run resumes after restart on the same `thread_id` | W4-05 |
-| 13 | **`test_idor_repro_on_unfixed_path`** | The legacy path still exhibits the HAR behaviour — kept as a **permanent regression guard**; fails loudly if someone "cleans up" the check | **W4-07** |
-| 14 | `test_authorized_path_blocks_the_same_walk` | The same walk through the new boundary is denied | W4-07 |
+| 13 | **`test_har_walk_is_now_denied`** | The exact HAR sequence — session bound to 1042, then `GET /api/patients/1043/records` — is **denied on the existing gateway route**. Fails loudly if the check is removed. *(The pre-fix reproduction lives in the findings doc as evidence, not as a permanently-failing test: a test asserting the vulnerability still reproduces either breaks CI or enshrines the bug.)* | **W4-07** |
+| 14 | `test_denial_is_not_an_enumeration_oracle` | A valid-but-unauthorized id and a nonexistent id return **identical** responses (404, same body) | W4-15 |
+| 14b | `test_patient_id_is_server_derived` | A client-supplied `patient_id` in the request or token payload is ignored; scope comes from the `users` row | W4-14 |
+| 14c | `test_patient_scope_includes_same_as_fragments` | A patient bound to one Maria Gonzalez fragment resolves a scope containing all three | W4-14 |
 | 15 | `test_domain_failure_degrades_not_fails` | Coverage branch raises → view returns with three domains and `coverage: unavailable` | W4-02 |
 | 16 | `test_synthesis_states_missing_domains` | Synthesis output names the unavailable domain rather than silently omitting | W4-02 |
-| 17 | `test_n_plus_one_measured` | Query counter records the per-encounter query count for the seeded chart; the number lands in the findings doc | W4-08 |
+| 17 | *(moved)* `scripts/measure_n_plus_one.py` | **No longer a test** (rescue R16 scope trim). A one-off measurement script; its output is pasted into the findings doc with the date and seed size. A test would have asserted a number that changes with seed data. | W4-08 |
 | 18 | `test_no_supervisor_dependency` | `langgraph-supervisor` absent from requirements — the rejection is enforced, not just documented | — |
 | 19 | `test_no_phi_in_graph_logs` | No node logs record bodies or identifiers | — |
 | 20 | `test_w1_w2_w3_modules_unmodified` | This PR modifies no earlier week's core modules | — |
+| 21 | **`test_e2e_patient_sees_own_view`** | A patient logs in and receives their own assembled view through the gateway; the same session requesting another patient is denied. Stub model, zero spend. **The client-visible feature, proven.** | **W4-16** |
 
 **Live tier:** `L5 test_live_synthesis_grounded` — one real synthesis call over
-seeded authorized material; asserts grounding and cost under ceiling.
+seeded authorized material; asserts grounding and cost under ceiling. Gated
+behind `L0` (retention preflight).
+
+---
+
+## 5b. Scope cuts taken after the rescue review
+
+W4 was over budget for ~40 hours. Cut, with reasons:
+
+| Cut | Why | Where it goes |
+|---|---|---|
+| `Record.source_message_id` provenance edge | The column does not exist in `db/schema.sql`; adding it is a migration W4 does not need | **W6**, where the HL7 mapper work actually requires it. ADR 0010's provenance section is marked *Proposed*. |
+| Live per-domain degradation of the **coverage** branch | Reuses W3's eligibility client, which is already tested there. W4 stubs it. | Already covered by W3 |
+| N+1 as a test | Asserts a number that moves with seed data | Measurement script + findings doc |
+
+**Kept despite the budget:** HITL. It is an explicit engagement requirement and it
+is one `interrupt()` call at one node — cutting it would save an hour and lose a
+deliverable.
+
+**Added by the budget:** ADR 0011's session binding. It is not optional; without
+it there is no authorization gate and therefore no week. The cuts above pay for it.
 
 ---
 

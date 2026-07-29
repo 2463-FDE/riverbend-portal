@@ -48,9 +48,52 @@ Bedrock appears on the [AWS HIPAA-eligible services reference][hipaa], so it
 *may* carry PHI under an executed BAA. AWS documents that Bedrock runs models in
 per-provider Model Deployment Accounts and that "model providers don't have any
 access to those accounts… they don't have access to Amazon Bedrock logs or to
-customer prompts and completions" ([Bedrock data protection][dp]). That is the
-architectural reason to prefer it over a raw vendor API — and it is *eligibility*,
-not compliance. Compliance still requires the signed BAA we do not have.
+customer prompts and completions" ([Bedrock data protection][dp]), and that the
+service uses a zero-operator-access and zero-data-retention model **by default**
+([abuse detection][abuse]). That is *eligibility*, not compliance. Compliance
+still requires the signed BAA we do not have — **and a retention decision, below.**
+
+#### 1a. Data retention is a mode, and it is a compliance control
+
+This is the correction that matters most in this ADR. It is not enough to say
+"Bedrock is HIPAA-eligible and providers can't see prompts." Bedrock exposes an
+explicit retention mode ([Bedrock data retention][ret]):
+
+| Mode | Behaviour |
+|---|---|
+| `none` | **Zero data retention.** No request or response data is written to durable storage by AWS or shared with the model provider. |
+| `default` | The model's own policy. AWS **may retain** data for safety and abuse prevention. The provider does not receive it. |
+| `provider_data_share` | AWS **retains and shares** inference data with the model provider. Required for access to certain models. |
+| `inherit` | No opinion at this scope; defer to a broader one. Default for new accounts and projects. |
+
+Resolution is `effective = first non-inherit value of (project → account → model
+default)`. Each model independently declares `allowed_modes`.
+
+AWS states that for models requiring `provider_data_share` — currently Claude
+Mythos 5 and Claude Fable 5 — "user prompts and completions are shared with
+Anthropic and retained for up to 30 days for trust and safety purposes."
+
+**Therefore:**
+
+1. **The effective mode for this workload is `none`.** Set at account scope, and
+   enforced organisation-wide by SCP on `bedrock:PutAccountDataRetention` /
+   `bedrock-mantle:PutAccountDataRetention` with a
+   `StringNotEquals: {DataRetentionMode: "none"}` deny.
+2. **Any model whose `allowed_modes` excludes `none` is disqualified for this
+   workload, regardless of capability.** Selecting one would send PHI to a third
+   party for 30 days — which is precisely debt **D13**, the impermissible
+   disclosure this engagement exists to prevent (164.502(e)).
+3. **We verify rather than assume.** Bedrock fails closed — "if your account or
+   project is configured for zero data retention… and you invoke a model that
+   requires retention, Amazon Bedrock will block the request and return an error,"
+   and such a model reports `status: "unavailable"`. We rely on that as a backstop,
+   not as the control: a startup preflight asserts the effective mode is `none`
+   **and** that the configured model's `allowed_modes` contains `none`, and refuses
+   to serve otherwise. Requirement `RVB-X-09`.
+
+Note also that cross-region inference stores any retained inputs and outputs in
+the **destination** region — relevant if inference profiles ever route outside the
+agreed BAA geography.
 
 **Model identifiers** are region-scoped inference-profile IDs, supplied by env
 with a documented default, never hard-coded. They are overridable **per path**
@@ -123,17 +166,31 @@ than a claim (debate D6).
 
 `ApplyGuardrail` is usable independently of model invocation — AWS documents it as
 "decoupled from foundational models… You can use Guardrails without invoking
-Foundation Models", evaluating `source: INPUT` before retrieval and
-`source: OUTPUT` before serving ([ApplyGuardrail][guard]). Contextual grounding
-returns separate **grounding** and **relevance** confidence scores with
-thresholds configurable between 0 and 0.99 ([contextual grounding][cgc]).
+Foundation Models" ([ApplyGuardrail][guard]).
+
+**The two sides are not the same policy set, and conflating them was an error in
+an earlier draft of this ADR.**
+
+| Side | `source` | Policies that apply | Used for |
+|---|---|---|---|
+| Input | `INPUT` | Content filters, denied topics, word lists, **sensitive-information (PII) filters** | Screen the user's text *before* retrieval or generation — catch a pasted identifier or an out-of-scope request without spending a generation |
+| Output | `OUTPUT` | The above, **plus contextual grounding** | Screen the model's response before it is served |
+
+**Contextual grounding is output-side only.** AWS is explicit that it "require[s]
+3 components to perform the check: the grounding source, the query, and the content
+to guard (or the model response)" ([contextual grounding][cgc]). There is no model
+response at input time, so grounding cannot be evaluated there. It returns separate
+**grounding** and **relevance** confidence scores, thresholds configurable between
+0 and 0.99 (1 is invalid — it blocks everything), with limits of 100,000 characters
+of grounding source, 1,000 of query and 5,000 of response.
 
 **Documented limitation, carried into ADR 0008:** AWS states contextual grounding
 supports summarization, paraphrasing and question answering, and that
 "Conversational QA / Chatbot use cases are not supported." W1's summary path and
 W2's RAG answer path qualify. **W3's conversational eligibility assistant does
 not** — it gets a deterministic check that the status it reports equals the status
-the tool returned, which is the correct control for that shape anyway.
+the tool returned, which is the correct control for that shape anyway. W3 may
+still use `source: INPUT` PII filtering, which is unaffected by that limitation.
 
 ### 5. Persistence of agent state
 
@@ -147,11 +204,16 @@ an encrypted durable saver anywhere state persists.
 
 | Tier | Marker | Runs | Proves |
 |---|---|---|---|
-| T1 | default | CI | Timeouts, retry classification, parse fallbacks, budget refusal, scrub coverage, no-PHI-in-logs, breaker state machine, authz ordering, interrupt/resume |
+| T1 | default | CI | Timeouts, retry classification, parse fallbacks, budget refusal, scrub coverage, no-PHI-in-logs, breaker state machine, authz ordering, interrupt/resume, **retention preflight fails closed** |
 | T2 | default | CI | Golden-set retrieval eval with deterministic offline embeddings — reproducible recall/precision/groundedness numbers we hand the client |
-| T3 | `@pytest.mark.live` | skipped unless keyed | Live Bedrock resolution + invocation, each test asserting a hard per-test cost ceiling |
+| T2e | default | CI | **One end-to-end happy path per week through the gateway, against the stub model** — proves the surface the client actually clicks, not only its guardrails |
+| T3 | `@pytest.mark.live` | skipped unless keyed | Live Bedrock resolution + invocation, each test asserting a hard per-test cost ceiling. **L0 runs first and spends nothing:** `GET /v1/models/{model}` asserting `allowed_modes` contains `none`. |
 
 T3 is written **up front**, not on key-day.
+
+The T2e tier exists because an earlier draft tested only that an unauthenticated
+call returns 401 — which an endpoint that rejects *everything* would also pass.
+Controls without a working feature is not a delivery.
 
 ## Consequences
 
@@ -174,6 +236,8 @@ an oversight.
 
 [hipaa]: https://aws.amazon.com/compliance/hipaa-eligible-services-reference/
 [dp]: https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html
+[ret]: https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html
+[abuse]: https://docs.aws.amazon.com/bedrock/latest/userguide/abuse-detection.html
 [keys]: https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html
 [titan]: https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html
 [guard]: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-independent-api.html

@@ -129,9 +129,29 @@ exists specifically for that failure and is tested against that transcript.
 
 **A failed check never returns raw model text.** It returns a fixed safe message.
 
-Tier-1 upgrade path (ADR 0004): the same call site invokes Bedrock
-`ApplyGuardrail` with contextual grounding, thresholds from config. Mock-tested
-now; enabled by config later.
+Tier-1 upgrade path (ADR 0004) — **two sides, two policy sets**:
+
+| Side | `source` | Policies | When |
+|---|---|---|---|
+| Input | `INPUT` | content filters, denied topics, word lists, **PII detectors** | before generation — catch a pasted identifier without spending a call |
+| Output | `OUTPUT` | the above **+ contextual grounding** (`grounding_source`, `query`, response) | before serving |
+
+**Contextual grounding is output-only.** AWS requires three components — grounding
+source, query, and the content to guard — and there is no model response at input
+time. An earlier draft of this spec asserted grounding on both sides; that was
+wrong and the rescue review caught it. Mock-tested now; enabled by config later.
+
+### 3.3b Retention preflight (`RVB-W1-16`, `RVB-X-09`)
+
+Before the service will answer any request, it asserts the Bedrock **effective
+data-retention mode is `none`** and that the configured model's `allowed_modes`
+contains `none`. Either check failing means the service refuses to start serving.
+
+This is not belt-and-braces. AWS documents that models requiring
+`provider_data_share` share prompts and completions with the provider and retain
+them for up to 30 days — which for a PHI workload is debt **D13**, the exact
+impermissible disclosure this engagement exists to prevent. Model choice is a
+compliance control, and it is enforced in code rather than trusted to a runbook.
 
 ### 3.4 `audit.py` + logging — the inverse of D1
 
@@ -161,7 +181,7 @@ in depth: the design keeps bodies out, the filter catches the mistake.
 |---|---|---|---|
 | `RVB-W1-08` | **D1** — PHI in plaintext logs | `logs/intake-service.log`: `INFO request body={"name":…,"dob":"1971-03-02","ssn":…}` on every POST | The log aggregator is now a PHI store nobody classified as one. Every operator, every backup, every log-shipping vendor is in scope. 164.502(b) minimum-necessary; 164.312(b) — the thing that should be the audit trail is the largest attack surface. |
 | `RVB-W1-09` | **D9** — secrets committed | `.env` tracked by git, absent from `.gitignore`, containing DB creds, payer key, Bedrock key | One repo leak is an instant ePHI compromise. "Private repo" is not a control — it is a hope. 164.308 risk management. |
-| `RVB-W1-10` | **D3 / twist #1** — "HIPAA compliant" is self-asserted | README claims all PHI encrypted; `db/schema.sql` shows `ssn`, `dob`, `notes` as plaintext `TEXT`; ADR 0002 documents disk-level encryption only | Today encryption at rest is *Addressable*, so the belief is defensible-ish. The 2025 Security Rule NPRM closes that loophole. This is a scheduled failure, not a current pass. |
+| `RVB-W1-10` | **D3 / twist #1** — "HIPAA compliant" is self-asserted | README claims all PHI encrypted; `db/schema.sql` shows `ssn`, `dob`, `notes` as plaintext `TEXT`; ADR 0002 documents disk-level encryption only | **This is a current-rule gap, not a future one.** "Addressable" under 164.306(d)(3) does *not* mean optional: a covered entity must implement the specification where reasonable and appropriate, or document why it is not and implement an equivalent alternative measure. Riverbend has done **neither** — there is no documented assessment and no equivalent alternative, only a claim. The 2025 Security Rule NPRM (proposed; the current rule remains in effect) would remove the Addressable/Required distinction entirely, so the gap widens rather than appearing. |
 
 Each finding must state: what we saw, where we saw it, what it means in dollars /
 audit exposure / patient safety, and what it would take to fix — in that order.
@@ -195,7 +215,7 @@ Every row is a test that must exist and pass with **no AWS credentials present**
 |---|---|---|---|
 | 1 | `test_deadline_bounds_total_wall_clock` | A client whose every attempt hangs raises `BedrockUnavailable` within `deadline_s` (+ tolerance), not `read_timeout × attempts` | W1-01 |
 | 2 | `test_retry_classification[error, expected]` | Parametrized over the table in §3.1 — retryable errors attempt `max_retries+1` times, non-retryable exactly once | W1-02 |
-| 3 | `test_backoff_is_bounded_and_jittered` | Sleep intervals are non-decreasing in expectation, never exceed `backoff_cap_s`, and are not identical across runs | W1-02 |
+| 3 | `test_backoff_is_bounded_and_jittered` | **RNG and clock injected.** With a fixed seed, the sleep sequence equals an exact expected list; every value lies in `[base·2ⁿ·0.5, min(cap, base·2ⁿ)]`; two different seeds produce different sequences. No statistical assertions — the earlier "non-decreasing in expectation" wording was a flaky test. | W1-02 |
 | 4 | `test_structured_output_parse[variant]` | Clean JSON, JSON in a prose wrapper, truncated JSON, and plain prose all yield a string summary; none raise | W1-03 |
 | 5 | `test_budget_refuses_before_any_call` | Oversized input raises `BudgetError` and the underlying client is never invoked (call count == 0) | W1-04 |
 | 6 | `test_cost_ceiling_refuses` | Projected cost above ceiling raises `BudgetError` pre-call | W1-04 |
@@ -210,12 +230,16 @@ Every row is a test that must exist and pass with **no AWS credentials present**
 | 15 | `test_invented_medication_is_caught` | The contractor's hallucinated-medication transcript fails the clinical-claim check even when overlap score passes | W1-03 |
 | 16 | `test_env_is_not_tracked` | `git ls-files` contains no `.env` | W1-12 |
 | 17 | `test_short_source_refuses` | Source below `min_source_chars` → refusal, no model call | W1-03 |
-| 18 | `test_apply_guardrail_wiring` (mocked) | With Tier 1 enabled, `ApplyGuardrail` is called with `source=INPUT` before generation and `source=OUTPUT` before serving; a `BLOCKED` verdict suppresses the response | W1-14 |
+| 18 | `test_apply_guardrail_input_side` (mocked) | With Tier 1 enabled, `ApplyGuardrail` is called with `source=INPUT` **before** generation carrying the content/PII/topic policies — **not** contextual grounding, which has no model response to evaluate at input time | W1-14 |
+| 19 | `test_apply_guardrail_output_side` (mocked) | `ApplyGuardrail` is called with `source=OUTPUT` **before serving**, carrying `grounding_source`, `query` and the response; a `BLOCKED` verdict suppresses the response and returns the safe message | W1-14 |
+| 20 | **`test_retention_preflight_fails_closed`** | A mocked effective mode of `default` or `provider_data_share`, or a model whose `allowed_modes` lacks `none`, causes the service to **refuse to serve** with a clear error. Mode `none` + compliant model → serves. | **W1-16** |
+| 21 | **`test_e2e_summary_through_gateway`** | Log in → `POST /ai/summary` with real intake-instruction text → a grounded summary returns with `grounded=true`. Stub model, zero spend. **The client-visible feature, proven.** | **W1-15** |
 
 **Live tier (written now, skipped without a key):**
 
 | # | Test | Asserts |
 |---|---|---|
+| **L0** | `test_live_model_allows_zero_retention` | **Runs first and spends nothing.** `GET /v1/models/{model}` → `data_retention.allowed_modes` contains `none`, and the account's effective mode is `none`. If this fails, no other live test runs. |
 | L1 | `test_live_model_resolves` | The configured inference-profile ID resolves and returns a completion |
 | L2 | `test_live_summary_under_budget` | One real summary call; asserts `est_cost_usd` below a hard per-test ceiling |
 
