@@ -1,0 +1,15 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+
+# boto3 >= 1.40 is required for AWS_BEARER_TOKEN_BEDROCK (Bedrock API keys).
+# Older pins ignore the variable entirely and fall through to the standard
+# credential chain, which surfaces as a confusing NoCredentialsError.
+boto3==1.43.58
+
+# Bedrock access goes through the Converse API via langchain-aws. LangChain v1
+# line — see adr/0004. langgraph is not a dependency of W1 by design: a single
+# request/response summarization has no state, no branching and no tools, so a
+# graph runtime would be cost without benefit (adr/0004 §2, debate D2).
+langchain-aws==1.6.4
+langchain-core==1.5.2

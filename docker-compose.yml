@@ -37,6 +37,7 @@ services:
       SCHEDULING_URL: http://scheduling-service:8074
       INTEROP_URL: http://interop-service:8075
       ROI_URL: http://roi-service:8076
+      AI_ORCHESTRATOR_URL: http://ai-orchestrator:8077
     ports:
       - "8070:8070"
     depends_on:
@@ -52,8 +53,28 @@ services:
         condition: service_started
       roi-service:
         condition: service_started
+      ai-orchestrator:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8070/healthz')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  ai-orchestrator:
+    build: ./services/ai-orchestrator
+    env_file: .env
+    environment:
+      # Stub by default: the stack runs with no AWS credentials and spends
+      # nothing. Flip to false only with a credential AND after the retention
+      # preflight passes (adr/0004 §1a).
+      USE_STUB_BEDROCK: "${USE_STUB_BEDROCK:-true}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      BEDROCK_MODEL_ID: "${BEDROCK_MODEL_ID:-us.anthropic.claude-3-5-haiku-20241022-v1:0}"
+    ports:
+      - "8077:8077"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8077/healthz')\""]
       interval: 10s
       timeout: 3s
       retries: 5

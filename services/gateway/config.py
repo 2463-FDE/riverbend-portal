@@ -22,6 +22,7 @@ class Settings:
     scheduling_url = os.getenv("SCHEDULING_URL", "http://scheduling-service:8074")
     interop_url = os.getenv("INTEROP_URL", "http://interop-service:8075")
     roi_url = os.getenv("ROI_URL", "http://roi-service:8076")
+    ai_orchestrator_url = os.getenv("AI_ORCHESTRATOR_URL", "http://ai-orchestrator:8077")
 
     @property
     def db_url(self) -> str:

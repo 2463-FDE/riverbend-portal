@@ -35,6 +35,7 @@ SERVICES = {
     "scheduling": settings.scheduling_url,
     "interop": settings.interop_url,
     "roi": settings.roi_url,
+    "ai": settings.ai_orchestrator_url,
 }
 
 
@@ -196,6 +197,18 @@ def proxy_roi_fulfill(request_id: int, session: dict = Depends(require_session))
 @app.post("/hl7/ingest")
 def proxy_hl7(payload: dict, session: dict = Depends(require_session)):
     return _post("interop", "/hl7/ingest", payload)
+
+
+# --------------------------------------------------------------------------- #
+# ai — intake-instruction summarizer (W1)
+#
+# Session-guarded like every other route: the AI feature adds NO new
+# unauthenticated surface. The orchestrator's contract accepts instruction text
+# only, so no patient record crosses this boundary — see adr/0005.
+# --------------------------------------------------------------------------- #
+@app.post("/ai/summary")
+def proxy_ai_summary(payload: dict, session: dict = Depends(require_session)):
+    return _post("ai", "/summary", payload)
 
 
 # --------------------------------------------------------------------------- #
