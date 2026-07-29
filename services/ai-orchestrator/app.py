@@ -24,7 +24,7 @@ What changed versus the contractor's version (git ``2a5039d``, removed at
 import uuid
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
 import audit
@@ -263,37 +263,234 @@ def seed_corpus():
     }
 
 
-@app.post("/ingest")
-def ingest(req: IngestRequest):
-    """Ingest a clinic knowledge document. NOT a path for patient records."""
+# =========================================================================== #
+# Ingest — two phases, one write path (adr/0014, codex F4).
+#
+# Phase one extracts, scrubs and STAGES. It never touches the index. Phase two
+# is the only thing in this service that writes to the knowledge collection.
+#
+# The old single-shot `POST /ingest` is gone. It was a second, unpreviewed door
+# into the highest-blast-radius write in the system, and leaving it open while
+# claiming a human gate is what made the first draft of adr/0014 false.
+# =========================================================================== #
+def _scrub_metadata(title: str, filename: str, source: str) -> tuple[dict, list]:
+    """Metadata is PHI too (RVB-ING-31..33, codex F3).
+
+    A clean body inside `Maria Gonzalez appeal.pdf` is still a disclosure: the
+    filename becomes a citation and a corpus row, both of which patients see.
+
+    Findings are RETURNED rather than silently applied, because
+    identifier-shaped metadata blocks the commit. Rewriting it quietly would hide
+    from the uploader that they picked a filename they should not reuse.
+    """
+    found = []
+    cleaned = {}
+    for field_name, value in (("title", title), ("filename", filename), ("source", source)):
+        result = deidentify.scrub_document(value or "")
+        cleaned[field_name] = result.text
+        if result.found:
+            found.append({"field": field_name, "kinds": sorted(set(result.found))})
+    return cleaned, found
+
+
+def _build_staged(text: str, title: str, filename: str, source: str,
+                  username: str, kind: str, pages: int, notes: list,
+                  truncated: bool) -> "staging.StagedDoc":
+    """Extract -> scrub -> count chunks. Shared by the upload and paste paths."""
+    import staging
+    from chunking import chunk_text
+
+    scrub = deidentify.scrub_document(text)
+    meta, meta_found = _scrub_metadata(title, filename, source)
+    chunks = chunk_text(scrub.text, settings.chunk_tokens, settings.chunk_overlap_tokens)
+
+    return staging.StagedDoc(
+        staging_id="",
+        title=meta["title"][:300] or "Untitled document",
+        text=scrub.text,
+        source=meta["source"][:300],
+        filename=meta["filename"][:300],
+        staged_by=username,
+        kind=kind,
+        pages=pages,
+        chars=len(scrub.text),
+        chunk_count=len(chunks),
+        redactions=sorted(set(scrub.found)),
+        metadata_redactions=meta_found,
+        notes=notes,
+        truncated=truncated,
+    )
+
+
+def _staging_response(doc, request_id: str) -> dict:
+    import staging
+
+    log.info("kb stage rid=%s doc=%s by=%s chunks=%d redactions=%d meta_flags=%d",
+             request_id, doc.staging_id, doc.staged_by, doc.chunk_count,
+             len(doc.redactions), len(doc.metadata_redactions))
+    audit.emit(log, request_id=request_id, outcome="staged",
+               reason=",".join(doc.redactions) or None)
+    return doc.preview(staging.ttl(doc.staging_id))
+
+
+def _stage_or_raise(doc):
+    import staging
+    try:
+        return staging.stage(doc)
+    except staging.TooManyStaged as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except staging.StagingUnavailable as e:
+        # Fails CLOSED. No staging means no preview, and no preview means no
+        # ingest -- we do not fall back to writing straight through.
+        log.error("kb stage unavailable: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="The document staging store is unavailable, so uploads are "
+                   "paused. Nothing was added to the knowledge base.")
+
+
+@app.post("/ingest/upload")
+async def ingest_upload(
+    file: UploadFile = File(...),
+    title: str = Form(default=""),
+    staged_by: str = Form(default=""),
+):
+    """Phase one, file. Extract, scrub, stage. Writes nothing to the index."""
+    import extract
+
+    rid = uuid.uuid4().hex[:12]
+    filename = file.filename or "upload"
+
+    try:
+        extract.check_supported(filename)
+    except extract.ExtractionError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    data = await file.read()
+    try:
+        got = extract.extract(data, filename)
+    except extract.ExtractionError as e:
+        log.info("kb upload rid=%s rejected=%s", rid, type(e).__name__)
+        raise HTTPException(status_code=422, detail=str(e))
+
+    doc = _build_staged(
+        text=got.text, title=extract.clean_title(title, filename), filename=filename,
+        source=f"uploaded file: {filename}", username=staged_by, kind=got.kind,
+        pages=got.pages, notes=got.notes, truncated=got.truncated,
+    )
+    return _staging_response(_stage_or_raise(doc), rid)
+
+
+@app.post("/ingest/stage")
+def ingest_stage(req: IngestRequest):
+    """Phase one, pasted text. Same staging, same preview, same commit.
+
+    The paste path goes through the gate too (codex F4) -- otherwise "every
+    knowledge write has a human gate" is false, and it was.
+    """
+    rid = uuid.uuid4().hex[:12]
+    doc = _build_staged(
+        text=req.text, title=req.title, filename="", source=req.source or "pasted text",
+        username=req.added_by, kind="text", pages=1, notes=[], truncated=False,
+    )
+    return _staging_response(_stage_or_raise(doc), rid)
+
+
+@app.get("/ingest/staged/{staging_id}")
+def ingest_peek(staging_id: str, username: str = ""):
+    import staging
+    try:
+        doc = staging.peek(staging_id, username)
+    except staging.StagingForbidden as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except staging.StagingNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except staging.StagingUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return doc.preview(staging.ttl(staging_id))
+
+
+class CommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(default="", max_length=120)
+
+
+@app.post("/ingest/commit/{staging_id}")
+def ingest_commit(staging_id: str, req: CommitRequest):
+    """Phase two. The ONLY path that writes to the knowledge collection."""
     import corpus as corpus_mod
+    import staging
     from chunking import chunk_text
     from index_port import KIND_KNOWLEDGE, IndexChunk
 
+    rid = uuid.uuid4().hex[:12]
+
+    try:
+        doc = staging.claim(staging_id, req.username)
+    except staging.StagingForbidden as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except staging.StagingNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except staging.StagingUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    # Identifier-shaped metadata blocks the commit (RVB-ING-33). Checked here as
+    # well as at stage time so a document cannot be staged before a scrubber
+    # change and committed after one.
+    if doc.metadata_redactions:
+        fields = ", ".join(m["field"] for m in doc.metadata_redactions)
+        log.warning("kb commit rid=%s blocked doc=%s fields=%s", rid, staging_id, fields)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Identifiers were found in the {fields}. Rename the document "
+                   f"and upload it again.")
+
     index = get_index()
-    scrub = deidentify.scrub_document(req.text)
-    doc_id = req.doc_id or f"doc-{uuid.uuid4().hex[:10]}"
+    # Deterministic in the staging id, so a retry after a partial add overwrites
+    # rather than duplicating (codex F7).
+    doc_id = f"doc-{staging_id[:10]}"
     chunks = [
         IndexChunk(
             id=f"{doc_id}::{c.index}",
             text=c.text,
             doc_id=doc_id,
-            doc_title=req.title,
+            doc_title=doc.title,
             chunk_index=c.index,
             kind=KIND_KNOWLEDGE,
-            source=req.source,
-            added_by=req.added_by,
+            source=doc.source,
+            added_by=doc.staged_by,
         )
-        for c in chunk_text(scrub.text, settings.chunk_tokens, settings.chunk_overlap_tokens)
+        for c in chunk_text(doc.text, settings.chunk_tokens, settings.chunk_overlap_tokens)
     ]
-    corpus_mod.enforce_cap(chunks, existing=index.count())
+
+    try:
+        corpus_mod.enforce_cap(chunks, existing=index.count())
+    except corpus_mod.CorpusCapExceeded as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
     added = index.add(chunks)
-    log.info(
-        "ingest doc=%s chunks=%d by=%s%s",
-        doc_id, added, req.added_by or "-",
-        (" phi_redacted=" + ",".join(scrub.found)) if scrub.found else "",
-    )
-    return {"doc_id": doc_id, "chunks": added, "phi_redacted": scrub.found}
+    log.info("kb commit rid=%s doc=%s chunks=%d by=%s%s",
+             rid, doc_id, added, doc.staged_by,
+             (" phi_redacted=" + ",".join(doc.redactions)) if doc.redactions else "")
+    audit.emit(log, request_id=rid, outcome="committed",
+               reason=",".join(doc.redactions) or None)
+    return {"doc_id": doc_id, "chunks": added, "title": doc.title,
+            "phi_redacted": doc.redactions}
+
+
+@app.post("/ingest/discard/{staging_id}")
+def ingest_discard(staging_id: str, req: CommitRequest):
+    import staging
+    try:
+        staging.discard(staging_id, req.username)
+    except staging.StagingForbidden as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except staging.StagingNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except staging.StagingUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    log.info("kb discard doc=%s by=%s", staging_id, req.username)
+    return {"discarded": staging_id}
 
 
 @app.get("/corpus")

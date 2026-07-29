@@ -34,3 +34,15 @@ langchain>=1.0,<2.0
 # production checkpointer encrypts at rest via EncryptedSerializer.
 langgraph-checkpoint-sqlite>=3,<4
 pycryptodome==3.21.0
+
+# W2 UI / adr/0014 — document upload.
+# pypdf runs IN-PROCESS, bounded by time/page/output limits in extract.py. That
+# bounds resource use; it does NOT contain a parser compromise. Isolation into a
+# separate worker is the mitigation and is named as residual risk, not assumed.
+pypdf==5.1.0
+python-multipart==0.0.20
+
+# Staging store for the two-phase ingest gate. Holds pre-commit document text,
+# which is explicitly NOT de-identified — encrypted at rest via staging.py using
+# the same LANGGRAPH_AES_KEY path as the checkpointer.
+redis==5.2.1

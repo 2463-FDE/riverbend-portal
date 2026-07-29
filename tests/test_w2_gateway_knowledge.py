@@ -69,6 +69,13 @@ def test_query_is_open_to_ordinary_staff(gateway):
 # --------------------------------------------------------------------------- #
 # writes are gated (RVB-W2-13)
 # --------------------------------------------------------------------------- #
+# The route these tests used to call, `/ai/knowledge/ingest`, is GONE (adr/0014
+# §4a, codex F4). It wrote straight to the index after a lenient scrub, so a
+# privileged user could bypass the preview entirely -- which made "every
+# knowledge write passes a human gate" false while the ADR asserted it.
+#
+# The capability check they pin is unchanged and still worth pinning; it now
+# guards `/ai/knowledge/stage`, phase one of the two-phase gate.
 def test_ingest_is_forbidden_for_ordinary_staff(gateway):
     """One bad document silently changes every future grounded answer.
 
@@ -76,7 +83,7 @@ def test_ingest_is_forbidden_for_ordinary_staff(gateway):
     where a human gate belongs.
     """
     resp = _client(gateway).post(
-        "/ai/knowledge/ingest", json={"title": "T", "text": "some policy"},
+        "/ai/knowledge/stage", json={"title": "T", "text": "some policy"},
         headers=_auth("staff-token"),
     )
     assert resp.status_code == 403
@@ -84,7 +91,7 @@ def test_ingest_is_forbidden_for_ordinary_staff(gateway):
 
 def test_ingest_is_allowed_for_the_knowledge_admin_role(gateway):
     resp = _client(gateway).post(
-        "/ai/knowledge/ingest", json={"title": "T", "text": "some policy"},
+        "/ai/knowledge/stage", json={"title": "T", "text": "some policy"},
         headers=_auth("admin-token"),
     )
     assert resp.status_code == 200
@@ -94,7 +101,7 @@ def test_ingest_by_username_allowlist(gateway, monkeypatch):
     monkeypatch.setattr(gateway.authz.settings, "knowledge_ingest_users",
                         frozenset({"frontdesk1"}))
     resp = _client(gateway).post(
-        "/ai/knowledge/ingest", json={"title": "T", "text": "policy"},
+        "/ai/knowledge/stage", json={"title": "T", "text": "policy"},
         headers=_auth("staff-token"),
     )
     assert resp.status_code == 200
@@ -103,12 +110,31 @@ def test_ingest_by_username_allowlist(gateway, monkeypatch):
 def test_added_by_is_server_stamped(gateway):
     """A caller must not be able to attribute their document to someone else."""
     _client(gateway).post(
-        "/ai/knowledge/ingest",
+        "/ai/knowledge/stage",
         json={"title": "T", "text": "policy", "added_by": "someone-else"},
         headers=_auth("admin-token"),
     )
     _service, _path, payload = gateway.__calls__[-1]
     assert payload["added_by"] == "kbadmin"
+
+
+def test_the_single_shot_write_path_no_longer_exists(gateway):
+    """codex F4. A second, unpreviewed door makes the gate decorative."""
+    resp = _client(gateway).post(
+        "/ai/knowledge/ingest", json={"title": "T", "text": "policy"},
+        headers=_auth("admin-token"),
+    )
+    assert resp.status_code == 404
+
+
+def test_staging_reaches_the_stage_endpoint_not_the_index(gateway):
+    """Phase one must not be wired to anything that writes."""
+    _client(gateway).post(
+        "/ai/knowledge/stage", json={"title": "T", "text": "policy"},
+        headers=_auth("admin-token"),
+    )
+    _service, path, _payload = gateway.__calls__[-1]
+    assert path == "/ingest/stage"
 
 
 def test_seed_is_gated_too(gateway):

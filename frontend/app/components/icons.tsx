@@ -125,3 +125,12 @@ export const IconHeart = (p: IconProps) => (
     <path d="M12 21s-7-4.6-9.5-9A5 5 0 0 1 12 6a5 5 0 0 1 9.5 6c-2.5 4.4-9.5 9-9.5 9Z" />
   </svg>
 );
+
+// W2 (2/2) — the knowledge base. Same 20x20 stroked grid as the rest of the set.
+export const IconKnowledge = (p: IconProps) => (
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"
+       strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <path d="M4 4.5h5a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H4z" />
+    <path d="M16 4.5h-5a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H16z" />
+  </svg>
+);

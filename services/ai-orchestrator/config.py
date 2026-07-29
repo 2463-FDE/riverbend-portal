@@ -156,6 +156,10 @@ class Settings:
     # bodies is an un-BAA'd disclosure path for the agent endpoint. See adr/0008.
     trace_enabled = _b("LANGSMITH_TRACING", False)
     trace_api_key = os.getenv("LANGSMITH_API_KEY", "")
+
+    # adr/0014 — staging store for the two-phase ingest gate. Named here rather
+    # than read ad hoc so the ingest path has one source of truth for it.
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     trace_project = os.getenv("LANGSMITH_PROJECT", "riverbend-portal")
 
     # --- data retention (RVB-X-09 — compliance control, not a tunable) ---- #

@@ -17,7 +17,8 @@ Inherited shortcomings:
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import (Depends, FastAPI, File, Form, Header, HTTPException, Query,
+                     UploadFile)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -476,14 +477,94 @@ def proxy_identity_clusters(session: dict = Depends(require_session)):
     return _get("ai", "/identity/clusters")
 
 
-@app.post("/ai/knowledge/ingest")
-def proxy_kb_ingest(payload: dict, session: dict = Depends(require_session)):
-    authz.require_ingest(session)  # 403 unless knowledge admin
-    # Provenance is server-stamped from the session, never client-supplied: a
-    # caller must not be able to attribute their document to someone else.
+# --------------------------------------------------------------------------- #
+# Knowledge ingest — two phases, one write path (adr/0014, codex F4)
+#
+# `POST /ai/knowledge/ingest` is GONE. It wrote straight to the index after a
+# lenient scrub, which meant a privileged user could bypass the preview entirely
+# and the "human gate on every knowledge write" claim was false. Paste and upload
+# now stage through the same preview and the same commit.
+# --------------------------------------------------------------------------- #
+UPLOAD_MAX_BYTES = 10 * 1024 * 1024      # RVB-ING-08
+
+
+@app.post("/ai/knowledge/upload")
+async def proxy_kb_upload(
+    file: UploadFile = File(...),
+    title: str = Form(default=""),
+    session: dict = Depends(require_session),
+):
+    """Phase one. Stages a preview; writes nothing to the index."""
+    authz.require_ingest(session)
+
+    # Read in bounded chunks and abort the moment the cap is passed (RVB-ING-35).
+    # Reading the whole body and then measuring it is the version of this check
+    # that does not protect anything.
+    buf = bytearray()
+    while chunk := await file.read(64 * 1024):
+        buf.extend(chunk)
+        if len(buf) > UPLOAD_MAX_BYTES:
+            log.warning("kb upload oversize user=%s", session.get("username"))
+            raise HTTPException(
+                status_code=413,
+                detail=f"That file is larger than the "
+                       f"{UPLOAD_MAX_BYTES // (1024 * 1024)} MB limit.")
+
+    log.info("kb upload user=%s filename=%s bytes=%d",
+             session.get("username"), file.filename, len(buf))
+
+    # `staged_by` is server-stamped here and never read from the request, so a
+    # caller cannot attribute a document to someone else.
+    try:
+        r = httpx.post(
+            f"{SERVICES['ai']}/ingest/upload",
+            files={"file": (file.filename or "upload", bytes(buf),
+                            file.content_type or "application/octet-stream")},
+            data={"title": title, "staged_by": session.get("username", "")},
+            timeout=60,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("kb upload transport failure: %s", type(e).__name__)
+        return JSONResponse(status_code=502,
+                            content={"detail": "the assistant service is unavailable"})
+    return _relay(r)
+
+
+@app.post("/ai/knowledge/stage")
+def proxy_kb_stage(payload: dict, session: dict = Depends(require_session)):
+    """Phase one, pasted text. Same gate as upload."""
+    authz.require_ingest(session)
     payload = {**payload, "added_by": session.get("username", "")}
-    log.info("kb ingest user=%s title=%s", session.get("username"), payload.get("title"))
-    return _post("ai", "/ingest", payload)
+    log.info("kb stage user=%s title=%s", session.get("username"), payload.get("title"))
+    return _post("ai", "/ingest/stage", payload)
+
+
+@app.get("/ai/knowledge/staged/{staging_id}")
+def proxy_kb_staged(staging_id: str, session: dict = Depends(require_session)):
+    authz.require_ingest(session)
+    return _get("ai", f"/ingest/staged/{staging_id}",
+                params={"username": session.get("username", "")})
+
+
+@app.post("/ai/knowledge/staged/{staging_id}/commit")
+def proxy_kb_commit(staging_id: str, session: dict = Depends(require_session)):
+    """Phase two. The only path that reaches the index.
+
+    Takes no body from the client: the username is the session's, and the
+    document is whatever was staged. There is nothing here for a client to
+    influence.
+    """
+    authz.require_ingest(session)
+    log.info("kb commit user=%s staging=%s", session.get("username"), staging_id)
+    return _post("ai", f"/ingest/commit/{staging_id}",
+                 {"username": session.get("username", "")})
+
+
+@app.post("/ai/knowledge/staged/{staging_id}/discard")
+def proxy_kb_discard(staging_id: str, session: dict = Depends(require_session)):
+    authz.require_ingest(session)
+    return _post("ai", f"/ingest/discard/{staging_id}",
+                 {"username": session.get("username", "")})
 
 
 @app.post("/ai/knowledge/seed")
