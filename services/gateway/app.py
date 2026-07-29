@@ -100,6 +100,34 @@ def require_scope(session: dict) -> "scope_mod.AuthorizedScope":
     return scope_mod.resolve_scope(session, same_as_lookup=_same_as_lookup)
 
 
+def require_staff(session: dict) -> dict:
+    """Operational / diagnostic surfaces are staff-only (codex F2).
+
+    These endpoints are ABOUT the corpus rather than answers from it, and their
+    payloads are cross-patient by construction. Verified live before this gate
+    existed, as `maria.gonzalez` — a patient:
+
+      /ai/knowledge/identity-clusters -> every patient's name and chart ids, plus
+          match reasons including `identical_ssn` and `identical_address`
+      /ai/knowledge/corpus            -> "James O'Brien — office_visit 2026-02-20"
+      /ai/knowledge/eval              -> the same, inside identity_split_examples
+
+    `require_session` was the only guard, which was correct while every session
+    was staff. #16 gave patients sessions and did not revisit these routes.
+
+    Uses the resolved principal rather than the raw role string: `scope.py` is
+    the one place that decides what a session is, and a second opinion here is
+    how the two drift apart.
+    """
+    if require_scope(session).principal != "staff":
+        log.warning("staff-only route refused user=%s", session.get("username"))
+        raise HTTPException(
+            status_code=403,
+            detail="This view is for clinic staff.",
+        )
+    return session
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "service": settings.service_name}
@@ -353,26 +381,98 @@ def proxy_agent_eligibility(payload: dict, session: dict = Depends(require_sessi
 
 @app.post("/ai/knowledge/query")
 def proxy_kb_query(payload: dict, session: dict = Depends(require_session)):
+    """Clinic knowledge only. This endpoint may NEVER reach the record collection.
+
+    It used to forward `payload` verbatim. The orchestrator picks its collection
+    from the presence of `patient_scope`:
+
+        kind = KIND_RECORD if req.patient_scope is not None else KIND_KNOWLEDGE
+
+    so any authenticated session -- including a patient, since #16 -- could post
+    `{"query": ..., "patient_scope": [1043]}` and receive another patient's chart,
+    grounded and cited by name. Verified live before the fix: maria.gonzalez,
+    scope [1042, 1330, 1588], retrieved chart 1043.
+
+    `QueryRequest.patient_scope` carried the comment "the gateway supplies it from
+    the session; a client cannot widen its own scope." The gateway did neither.
+    The comment described the intended design and nothing enforced it.
+
+    Rejected loudly rather than stripped silently: a caller that tries to widen
+    scope should be told no, and the 400 is what the regression test pins.
+    """
+    if "patient_scope" in payload:
+        log.warning("kb query rejected user=%s reason=client_supplied_scope",
+                    session.get("username"))
+        raise HTTPException(
+            status_code=400,
+            detail="patient_scope is not accepted here. Use /ai/records/query, "
+                   "which derives scope from your session.",
+        )
     return _post("ai", "/query", payload)
+
+
+@app.post("/ai/records/query")
+def proxy_records_query(payload: dict, session: dict = Depends(require_session)):
+    """Chart-shaped questions, scoped by the SERVER (RVB-W2-U5).
+
+    Same split as `/patients/{id}/records`: authorization is resolved from the
+    session before anything is proxied, and the scope is overwritten rather than
+    merged, so a client-supplied value cannot survive.
+    """
+    scope = require_scope(session)
+    ids = sorted(scope.patient_ids)
+
+    # Staff are "open to context" -- no fixed id set -- so a records query needs
+    # an explicit patient, checked against the scope the same way every other
+    # record read is. Without this, `ids` is empty for staff and the query would
+    # silently return nothing.
+    if scope.open_to_context:
+        requested = payload.get("patient_id")
+        if not isinstance(requested, int):
+            raise HTTPException(
+                status_code=400,
+                detail="patient_id is required when searching records as staff.",
+            )
+        scope_mod.require_patient_access(scope, requested)
+        ids = [requested]
+
+    if not ids:
+        raise HTTPException(
+            status_code=403, detail="This session has no records in scope.")
+
+    body = {k: v for k, v in payload.items() if k not in ("patient_scope", "patient_id")}
+    log.info("records query user=%s scope=%s", session.get("username"), ids)
+    return _post("ai", "/query", {**body, "patient_scope": ids})
 
 
 @app.get("/ai/knowledge/corpus")
 def proxy_kb_corpus(session: dict = Depends(require_session)):
+    # Lists every indexed document, and record titles carry patient names and
+    # encounter dates. Staff-only (codex F2).
+    require_staff(session)
     return _get("ai", "/corpus")
 
 
 @app.post("/ai/knowledge/eval")
 def proxy_kb_eval(payload: dict, session: dict = Depends(require_session)):
+    # The report embeds identity_split_examples: named patients, chart ids, and
+    # the match reasons behind them. Staff-only (codex F2).
+    require_staff(session)
     return _post("ai", "/eval", payload)
 
 
 @app.get("/ai/knowledge/eval/latest")
 def proxy_kb_eval_latest(session: dict = Depends(require_session)):
+    require_staff(session)
     return _get("ai", "/eval/latest")
 
 
 @app.get("/ai/knowledge/identity-clusters")
 def proxy_identity_clusters(session: dict = Depends(require_session)):
+    # The single most sensitive diagnostic in the system: it names every patient,
+    # links their duplicate charts, and states WHY they matched -- including
+    # `identical_ssn`. Staff-only (codex F2).
+    require_staff(session)
     return _get("ai", "/identity/clusters")
 
 
