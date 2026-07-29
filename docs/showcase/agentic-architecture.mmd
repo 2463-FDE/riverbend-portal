@@ -1,0 +1,40 @@
+graph LR
+    U["Patient / Front desk<br/>browser"] --> P["Next.js portal"]
+    P --> G["Gateway / BFF<br/>★ AUTHORIZATION GATE ★<br/>deterministic — no model"]
+    G --> AO["ai-orchestrator"]
+    G --> DB[("Postgres<br/>patients · encounters · records")]
+
+    AO --> W1["W1 — Intake summary<br/>timeout · retry · cost guard"]
+    AO --> W2["W2 — Knowledge retrieval<br/>retrieve → relevance gate<br/>→ generate → grounding gate"]
+    AO --> W3["W3 — Eligibility assistant<br/>one tool · visit memory"]
+    AO --> W4["W4 — Patient view<br/>parallel assembly"]
+
+    W2 --> CH[("ChromaDB")]
+    CH --> CK["riverbend_knowledge<br/>clinic policy · open to staff"]
+    CH --> CR["riverbend_records<br/>PHI · patient-scoped only"]
+
+    W3 --> ES["eligibility-service<br/>circuit breaker<br/>last-known cache"]
+    ES -.-> PAY["Payer clearinghouse<br/>third party — goes down"]
+
+    W4 --> D1["demographics"]
+    W4 --> D2["encounters"]
+    W4 --> D3["labs"]
+    W4 --> D4["coverage"]
+    D1 --> SY["synthesize<br/>the only model call"]
+    D2 --> SY
+    D3 --> SY
+    D4 --> SY
+
+    W1 --> BR["AWS Bedrock<br/>data retention: none"]
+    W2 --> BR
+    W3 --> BR
+    SY --> BR
+
+    classDef gate fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#111
+    classDef phi fill:#fecaca,stroke:#b91c1c,stroke-width:2px,color:#111
+    classDef ext fill:#e5e7eb,stroke:#6b7280,stroke-dasharray:5 5,color:#111
+    classDef model fill:#bfdbfe,stroke:#1d4ed8,stroke-width:2px,color:#111
+    class G gate
+    class CR,DB phi
+    class PAY ext
+    class BR,SY model

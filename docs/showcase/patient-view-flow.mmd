@@ -1,0 +1,33 @@
+graph TD
+    REQ["Request<br/>who is asking · which chart"] --> AUTH["★ AUTHORIZE ★<br/>deterministic · runs FIRST<br/>no model involved"]
+    AUTH --> Q1{"Allowed to see<br/>this chart?"}
+
+    Q1 -->|"YES"| PLAN["plan<br/>which sections are needed"]
+    PLAN --> R1["demographics<br/>gets approved scope only"]
+    PLAN --> R2["encounters<br/>gets approved scope only"]
+    PLAN --> R3["labs<br/>gets approved scope only"]
+    PLAN --> R4["coverage<br/>gets approved scope only"]
+
+    R1 --> MERGE["merge<br/>one section can fail alone<br/>the rest still shows"]
+    R2 --> MERGE
+    R3 --> MERGE
+    R4 --> MERGE
+
+    MERGE --> Q2{"Disclosure-shaped<br/>request?"}
+    Q2 -->|"YES"| HUMAN["PAUSE — a human approves<br/>nothing is released meanwhile"]
+    HUMAN --> SYN
+    Q2 -->|"NO"| SYN["synthesize<br/>the ONLY model call<br/>sees approved material only"]
+    SYN --> REL(["Release to the patient"])
+
+    Q1 -->|"NO"| DENY(["404 returned · ZERO records loaded<br/>no retriever ever runs"])
+
+    classDef gate fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#111
+    classDef stop fill:#fecaca,stroke:#b91c1c,stroke-width:3px,color:#111
+    classDef human fill:#ddd6fe,stroke:#6d28d9,stroke-width:3px,color:#111
+    classDef model fill:#bfdbfe,stroke:#1d4ed8,stroke-width:2px,color:#111
+    classDef good fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#111
+    class AUTH gate
+    class DENY stop
+    class HUMAN human
+    class SYN model
+    class REL good

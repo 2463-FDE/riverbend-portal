@@ -1,0 +1,589 @@
+<title>Riverbend Community Health — Four Weeks of Work</title>
+
+<style>
+  :root {
+    --paper:      #F5F4F0;
+    --paper-2:    #EDEBE5;
+    --ink:        #17211E;
+    --ink-2:      #4A5551;
+    --ink-3:      #78827E;
+    --rule:       #D6D3CA;
+    --alert:      #C1362A;
+    --alert-bg:   #F7E7E4;
+    --shipped:    #2C6B64;
+    --shipped-bg: #E2EDEB;
+    --amber:      #9A6B10;
+    --amber-bg:   #F6ECD8;
+
+    --display: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino,
+               "Book Antiqua", Georgia, serif;
+    --body: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+            Roboto, "Helvetica Neue", Arial, sans-serif;
+    --data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+            "Liberation Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #141A18;
+      --paper-2:    #1D2523;
+      --ink:        #EDEBE4;
+      --ink-2:      #B3BBB7;
+      --ink-3:      #7F8985;
+      --rule:       #2E3835;
+      --alert:      #E8776A;
+      --alert-bg:   #2E1D1A;
+      --shipped:    #6FBDB2;
+      --shipped-bg: #162B28;
+      --amber:      #D9A94A;
+      --amber-bg:   #2C2412;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:      #141A18;
+    --paper-2:    #1D2523;
+    --ink:        #EDEBE4;
+    --ink-2:      #B3BBB7;
+    --ink-3:      #7F8985;
+    --rule:       #2E3835;
+    --alert:      #E8776A;
+    --alert-bg:   #2E1D1A;
+    --shipped:    #6FBDB2;
+    --shipped-bg: #162B28;
+    --amber:      #D9A94A;
+    --amber-bg:   #2C2412;
+  }
+  :root[data-theme="light"] {
+    --paper:      #F5F4F0;
+    --paper-2:    #EDEBE5;
+    --ink:        #17211E;
+    --ink-2:      #4A5551;
+    --ink-3:      #78827E;
+    --rule:       #D6D3CA;
+    --alert:      #C1362A;
+    --alert-bg:   #F7E7E4;
+    --shipped:    #2C6B64;
+    --shipped-bg: #E2EDEB;
+    --amber:      #9A6B10;
+    --amber-bg:   #F6ECD8;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- slide shell ---------------------------------------------------- */
+  .deck { display: flex; flex-direction: column; }
+
+  section.slide {
+    min-height: 100svh;
+    padding: clamp(2.5rem, 6vw, 5.5rem) clamp(1.25rem, 6vw, 6rem);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.5rem;
+    border-bottom: 1px solid var(--rule);
+    scroll-margin-top: 0;
+    position: relative;
+  }
+  section.slide > * { max-width: 62rem; width: 100%; }
+  section.slide.wide > * { max-width: 78rem; }
+
+  .tab {
+    font-family: var(--data);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+  }
+  .tab b { color: var(--ink-2); font-weight: 600; }
+
+  h1 {
+    font-family: var(--display);
+    font-size: clamp(2.4rem, 6.5vw, 4.4rem);
+    line-height: 1.04;
+    letter-spacing: -0.018em;
+    font-weight: 600;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h2 {
+    font-family: var(--display);
+    font-size: clamp(1.7rem, 4vw, 2.9rem);
+    line-height: 1.12;
+    letter-spacing: -0.014em;
+    font-weight: 600;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--body);
+    font-size: 0.78rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 650;
+    margin: 0;
+  }
+  p { margin: 0; max-width: 42em; }
+  .lede { font-size: clamp(1.05rem, 2vw, 1.3rem); color: var(--ink-2); line-height: 1.55; }
+  .quiet { color: var(--ink-2); }
+  strong { font-weight: 650; }
+
+  /* ---- the pull-quote / verdict --------------------------------------- */
+  .verdict {
+    border-left: 4px solid var(--alert);
+    background: var(--alert-bg);
+    padding: 1.1rem 1.4rem;
+    font-family: var(--display);
+    font-size: clamp(1.15rem, 2.4vw, 1.65rem);
+    line-height: 1.35;
+    text-wrap: balance;
+  }
+  .verdict.good { border-left-color: var(--shipped); background: var(--shipped-bg); }
+  .verdict.warn { border-left-color: var(--amber);  background: var(--amber-bg); }
+
+  /* ---- figures --------------------------------------------------------- */
+  .figs { display: flex; flex-wrap: wrap; gap: 2.5rem 3.5rem; }
+  .fig { display: flex; flex-direction: column; gap: 0.15rem; }
+  .fig .n {
+    font-family: var(--data);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(2.1rem, 5vw, 3.2rem);
+    line-height: 1;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .fig .n.alert   { color: var(--alert); }
+  .fig .n.good    { color: var(--shipped); }
+  .fig .n.warn    { color: var(--amber); }
+  .fig .k { font-size: 0.82rem; color: var(--ink-3); max-width: 15rem; line-height: 1.35; }
+
+  /* ---- chart table ------------------------------------------------------ */
+  .scroller { overflow-x: auto; width: 100%; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.92rem;
+    min-width: 34rem;
+  }
+  th {
+    text-align: left;
+    font-family: var(--body);
+    font-size: 0.7rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 650;
+    padding: 0 0.9rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td {
+    padding: 0.62rem 0.9rem 0.62rem 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  td.d, th.d { font-family: var(--data); font-variant-numeric: tabular-nums; }
+  tr.flag td { background: var(--alert-bg); }
+  tr.flag td:first-child { box-shadow: inset 3px 0 0 var(--alert); padding-left: 0.7rem; }
+  .none { color: var(--ink-3); }
+  .hit  { color: var(--alert); font-weight: 650; }
+
+  /* ---- two-column compare ---------------------------------------------- */
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1.5rem; }
+  .card {
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    padding: 1.25rem 1.35rem;
+    display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .card.alert   { border-left: 4px solid var(--alert); }
+  .card.shipped { border-left: 4px solid var(--shipped); }
+  .card h4 { margin: 0; font-family: var(--body); font-size: 1rem; font-weight: 650; }
+  .card p  { font-size: 0.92rem; color: var(--ink-2); }
+
+  ul { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  li { max-width: 42em; }
+  li::marker { color: var(--ink-3); }
+
+  code, .mono { font-family: var(--data); font-size: 0.88em; }
+
+  .say {
+    border-top: 1px solid var(--rule);
+    padding-top: 0.9rem;
+    font-family: var(--display);
+    font-size: 1.05rem;
+    color: var(--ink-2);
+    font-style: italic;
+    max-width: 44em;
+  }
+  .say b { font-style: normal; font-family: var(--body); font-size: 0.68rem;
+           letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3);
+           display: block; margin-bottom: 0.35rem; font-weight: 650; }
+
+  pre.mermaid { background: transparent; text-align: center; overflow-x: auto; }
+
+  .ledger { display: grid; grid-template-columns: auto 1fr; gap: 0.55rem 1.1rem; align-items: baseline; }
+  .ledger .s {
+    font-family: var(--data); font-size: 0.7rem; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 0.12rem 0.5rem; white-space: nowrap;
+  }
+  .s.fixed { color: var(--shipped); background: var(--shipped-bg); }
+  .s.open  { color: var(--alert);   background: var(--alert-bg); }
+  .s.named { color: var(--amber);   background: var(--amber-bg); }
+
+  footer { padding: 3rem clamp(1.25rem, 6vw, 6rem); color: var(--ink-3); font-size: 0.85rem; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+  @media print {
+    section.slide { min-height: auto; page-break-after: always; border: 0; }
+  }
+</style>
+
+<div class="deck">
+
+<!-- 1 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Riverbend Community Health</b><span>Engineering engagement · Weeks 1–4</span></div>
+  <h1>You asked for four features.<br>We shipped four features<br>and found six problems.</h1>
+  <p class="lede">None of the six were on your list. All six were in the materials you
+  handed us on day one. This is what they are, what they cost you, and what we did about them.</p>
+  <div class="tab" style="margin-top:1.5rem"><span>Prepared for Dr. Maya Okonkwo, COO, and the board</span></div>
+</section>
+
+<!-- 2 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>The shape of the work</b></div>
+  <h2>Each week you asked for something.<br>Each week the ask led somewhere.</h2>
+  <div class="scroller">
+    <table>
+      <thead><tr><th class="d">Wk</th><th>You asked for</th><th>What it led to</th></tr></thead>
+      <tbody>
+        <tr><td class="d">1</td><td>“A little assistant that drafts a patient-friendly summary”</td>
+            <td>Live passwords sitting in the code repository</td></tr>
+        <tr><td class="d">2</td><td>“A helper that pulls the right past records”</td>
+            <td class="hit">One patient exists as three charts. One of them has her allergy.</td></tr>
+        <tr><td class="d">3</td><td>“An assistant that checks insurance eligibility”</td>
+            <td>Two of your open tickets are the same defect — and it stops registration</td></tr>
+        <tr><td class="d">4</td><td>“Let patients see their own labs in one place”</td>
+            <td class="hit">Any login could read any patient’s chart</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="say"><b>The pattern</b>Every one of these was discoverable in the files you
+  gave us. They were not hidden. They were just never looked for.</p>
+</section>
+
+<!-- 3 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 1</b><span>The AI feature</span></div>
+  <h2>The assistant works. What matters is what it refuses to do.</h2>
+  <div class="cols">
+    <div class="card shipped">
+      <h4>Accepted</h4>
+      <p>“Arrive fifteen minutes early, bring your insurance card and photo ID, and do not
+      eat for eight hours before your blood draw.”</p>
+      <p class="mono" style="color:var(--shipped)">grounding 0.92 · shown to patient</p>
+    </div>
+    <div class="card alert">
+      <h4>Withheld</h4>
+      <p>The same summary, plus: “<em>continue taking your metformin 500 mg as prescribed.</em>”</p>
+      <p class="mono" style="color:var(--alert)">grounding 0.60 · invented medication · withheld</p>
+    </div>
+  </div>
+  <div class="verdict">The score barely moved. A summary that is 95% right and invents one
+  medication is more dangerous than an obviously wrong one, because it reads as competent.</div>
+  <p class="quiet">So we don’t rely on the score. The system looks for clinical claims that
+  aren’t in the source text, and any hit withholds the answer outright. Your previous vendor’s
+  own transcript contained exactly this failure.</p>
+</section>
+
+<!-- 4 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 1</b><span>What we found instead</span></div>
+  <h2>Three things, none of which were on the brief.</h2>
+  <div class="cols">
+    <div class="card alert">
+      <h4>Live passwords in the repository</h4>
+      <p>The database password, your clearinghouse key, and the session secret were committed
+      to source control. Anyone who has ever cloned the code has all three, right now.</p>
+      <p class="mono" style="color:var(--alert)">Critical · rotation required</p>
+    </div>
+    <div class="card alert">
+      <h4>Patient details written to log files</h4>
+      <p>Every registration wrote the full form — name, date of birth, Social Security number —
+      into a plain text file. That file is a patient-data store nobody classified as one.</p>
+      <p class="mono" style="color:var(--alert)">High</p>
+    </div>
+    <div class="card alert">
+      <h4>“HIPAA compliant” isn’t</h4>
+      <p>Your README says all patient data is encrypted. Your database schema stores Social
+      Security numbers as plain text. Both statements are in the same repository.</p>
+      <p class="mono" style="color:var(--alert)">High · current-rule gap</p>
+    </div>
+  </div>
+  <p class="say"><b>Why the last one costs more than it looks</b>An auditor who finds a missing
+  control writes a finding. An auditor who finds a claim contradicted by your own schema stops
+  trusting your other statements — and widens the audit.</p>
+</section>
+
+<!-- 5 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 2</b><span>The finding</span></div>
+  <h2>This is one person.</h2>
+  <div class="scroller">
+    <table>
+      <thead><tr><th class="d">Chart</th><th>Name</th><th class="d">Date of birth</th>
+                 <th class="d">SSN</th><th>Allergies</th></tr></thead>
+      <tbody>
+        <tr><td class="d">1042</td><td>Maria Gonzalez</td><td class="d">1971-03-02</td>
+            <td class="d">412-55-9981</td><td class="none">none recorded</td></tr>
+        <tr class="flag"><td class="d">1330</td><td>Maria Gonzale<strong>s</strong></td>
+            <td class="d">1971-03-02</td><td class="d">412-55-9981</td>
+            <td class="hit">penicillin</td></tr>
+        <tr><td class="d">1588</td><td>M. Gonzalez</td><td class="d">1971-<strong>02-03</strong></td>
+            <td class="d">412-55-9981</td><td class="none">none recorded</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Same Social Security number. Same address. Same phone. Same insurance member ID.
+  <strong>Two of these charts say she has no allergies.</strong></p>
+  <p class="quiet">The third chart’s date of birth isn’t a different date — it’s the same date
+  with the day and month swapped. Your database stores dates as plain text, so nothing notices.</p>
+  <div class="verdict">A clinician opening chart 1042 sees an empty allergy list and prescribes
+  against it. The allergy is recorded. It is on a chart they did not open.</div>
+</section>
+
+<!-- 6 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 2</b><span>Why the test scores didn’t catch it</span></div>
+  <h2>Both of these numbers are true at the same time.</h2>
+  <div class="figs">
+    <div class="fig"><span class="n good">1.00</span>
+      <span class="k">Search accuracy, measured against your previous vendor’s own test set</span></div>
+    <div class="fig"><span class="n alert">0.56</span>
+      <span class="k">How much of the actual patient we were looking at</span></div>
+  </div>
+  <p>The search is finding everything we indexed. <strong>What we indexed is a third of the
+  patient.</strong> No amount of tuning the search fixes that.</p>
+  <div class="verdict">Your vendor’s test file expects the answer <em>“No known allergies on
+  file.”</em> The test was written to expect the bug. A system scoring 100% against it tells a
+  clinician this patient has no allergies.</div>
+  <div class="figs" style="margin-top:0.5rem">
+    <div class="fig"><span class="n good">0.56 → 1.00</span>
+      <span class="k">Same data, same search, with the fix we’re proposing</span></div>
+    <div class="fig"><span class="n good">recovered</span>
+      <span class="k">The penicillin allergy, now visible from any of her three charts</span></div>
+  </div>
+  <p class="say"><b>Worth knowing</b>Dr. Nguyen already reported this. RIV-160: “Why does the
+  allergy list look different depending on which chart I open for the same lady?” It was closed
+  as a display bug. He was right and the triage was wrong.</p>
+</section>
+
+<!-- 7 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 3</b><span>Two tickets</span></div>
+  <h2>These are the same defect.</h2>
+  <div class="cols">
+    <div class="card">
+      <h4 class="mono" style="font-family:var(--data)">RIV-088 · Medium</h4>
+      <p>“When we hit Save on a new patient, the page just spins for about 4–5 seconds before
+      it confirms. Doesn’t fail, just feels slow. Happens every time.”</p>
+    </div>
+    <div class="card alert">
+      <h4 class="mono" style="font-family:var(--data)">RIV-141 · High</h4>
+      <p>“Tuesday 9:00–9:20am the <strong>ENTIRE intake screen</strong> froze — front desk
+      couldn’t register any patient, <strong>not just eligibility</strong>.”</p>
+    </div>
+  </div>
+  <p>Your insurance eligibility check ran <em>inside</em> the registration request, with no time
+  limit. Your clearinghouse’s own status page shows their service degraded that Tuesday from
+  09:02 to 09:21. Your latency graph shows one spike that morning and is flat all week otherwise.</p>
+  <div class="verdict">For nineteen minutes, a third party’s outage became your outage — in
+  patient registration, which has nothing to do with insurance.</div>
+  <p class="say"><b>The consequence of closing the wrong one</b>Fixing “registration is slow”
+  cosmetically would have left the second ticket live, waiting for their next bad morning.</p>
+</section>
+
+<!-- 8 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 3</b><span>The same Tuesday, replayed</span></div>
+  <h2>Nineteen minutes now costs you nothing.</h2>
+  <div class="figs">
+    <div class="fig"><span class="n">76</span><span class="k">Registrations attempted during the outage</span></div>
+    <div class="fig"><span class="n good">76</span><span class="k">Registrations that succeeded</span></div>
+    <div class="fig"><span class="n good">40</span><span class="k">Times we called the failing clearinghouse — was 76</span></div>
+    <div class="fig"><span class="n good">30s</span><span class="k">To return to live answers once they recovered</span></div>
+  </div>
+  <p>Registration no longer waits for your clearinghouse. Coverage resolves separately and
+  updates the record when it arrives.</p>
+  <div class="card shipped" style="max-width:44rem">
+    <h4>What the receptionist sees</h4>
+    <p class="mono" style="font-size:0.95rem;color:var(--ink)">Active — as of 9:02AM on 3 Mar
+    (payer unreachable, showing last known).</p>
+  </div>
+  <p class="quiet">We never show a six-hour-old coverage status as though it were current. And
+  “we couldn’t check” is never displayed as “not covered” — that is how a covered patient gets
+  turned away at the desk.</p>
+</section>
+
+<!-- 9 ------------------------------------------------------------------- -->
+<section class="slide">
+  <div class="tab"><b>Week 4</b><span>The finding</span></div>
+  <h2>Any login could read any patient’s chart.</h2>
+  <p class="lede">Your handover included a browser recording. In it, one logged-in patient
+  requests chart 1042, gets it — then requests chart 1043, a different person, and gets that too.</p>
+  <div class="scroller">
+    <table>
+      <thead><tr><th>Request</th><th class="d">Then</th><th class="d">Now</th></tr></thead>
+      <tbody>
+        <tr><td>Her own chart <span class="mono">1042</span></td><td class="d">200 OK</td><td class="d">200 OK</td></tr>
+        <tr class="flag"><td>Someone else’s chart <span class="mono">1043</span></td>
+            <td class="d hit">200 OK</td><td class="d">404</td></tr>
+        <tr><td>A chart that doesn’t exist <span class="mono">999999</span></td>
+            <td class="d">404</td><td class="d">404</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Chart numbers are sequential. Anyone with a login could have walked the entire patient list
+  by changing a number in the address bar.</p>
+  <div class="verdict">It was not a forgotten check. Your system had no way to know which patient
+  a login belonged to. “Show me my own record” was not a question the database could answer.</div>
+</section>
+
+<!-- 10 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="tab"><b>Week 4</b><span>The fix, and how it’s built</span></div>
+  <h2>The check runs first. The AI runs last.</h2>
+  <div class="figs">
+    <div class="fig"><span class="n good">0</span>
+      <span class="k">Records loaded on a denied request — never read, not hidden afterwards</span></div>
+    <div class="fig"><span class="n good">404</span>
+      <span class="k">Identical to a chart that doesn’t exist, so nobody can probe for real ones</span></div>
+    <div class="fig"><span class="n good">3 of 3</span>
+      <span class="k">Of her own charts Maria now sees, including the one with her allergy</span></div>
+  </div>
+  <p>Permission is decided before anything is fetched, by ordinary code with no AI involved.
+  Each part of the record is then gathered in parallel, each one able to see only what was
+  approved. The AI writes the summary at the end, over material that has already cleared the gate.</p>
+  <div class="verdict good">The AI is never asked who should see what. That question is answered
+  before it is ever consulted.</div>
+</section>
+
+<!-- 11 ------------------------------------------------------------------ -->
+<section class="slide wide">
+  <div class="tab"><b>How it fits together</b></div>
+  <h2>One gate, four capabilities, one place data can leave.</h2>
+  <pre class="mermaid">
+graph LR
+    U["Patient / Front desk"] --> P["Portal"]
+    P --> G["Gateway<br/>★ PERMISSION GATE ★<br/>ordinary code, no AI"]
+    G --> AO["AI service"]
+    G --> DB[("Patient database")]
+    AO --> W1["Intake summary"]
+    AO --> W2["Record search"]
+    AO --> W3["Eligibility assistant"]
+    AO --> W4["Patient record view"]
+    W3 --> ES["Eligibility service<br/>times out, remembers<br/>the last answer"]
+    ES -.-> PAY["Insurance clearinghouse<br/>third party — goes down"]
+    W1 --> BR["AWS Bedrock<br/>nothing retained"]
+    W2 --> BR
+    W3 --> BR
+    W4 --> BR
+    classDef gate fill:#F6E2B0,stroke:#9A6B10,stroke-width:4px,color:#17211E
+    classDef ext fill:#EDEBE5,stroke:#78827E,stroke-dasharray:5 5,color:#17211E
+    class G gate
+    class PAY ext
+  </pre>
+  <p class="quiet">Everything patients and staff touch goes through one gate. Only one component
+  is allowed to talk to the AI, and the AI provider is configured to keep nothing.</p>
+</section>
+
+<!-- 12 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="tab"><b>Where things stand</b></div>
+  <h2>What’s fixed, what’s named, what’s still open.</h2>
+  <div class="ledger">
+    <span class="s fixed">Fixed</span><span>Cross-patient chart access — the walk in the recording now returns 404</span>
+    <span class="s fixed">Fixed</span><span>Registration surviving a clearinghouse outage</span>
+    <span class="s fixed">Fixed</span><span>Patient data no longer written to logs on the AI path</span>
+    <span class="s fixed">Fixed</span><span>Credentials removed from the repository <em>going forward</em></span>
+    <span class="s named">Named</span><span>One patient existing as several charts — design proposed, not built</span>
+    <span class="s named">Named</span><span>Chart loading gets slower the longer a patient’s history is</span>
+    <span class="s named">Named</span><span>Logins never expire — no automatic logoff on shared workstations</span>
+    <span class="s open">Open</span><span>Every staff member can still see every chart — front desk, billing, clinicians share one permission set</span>
+    <span class="s open">Open</span><span>Patient data is still stored unencrypted in the database</span>
+    <span class="s open">Open</span><span>Nothing can answer “who viewed this patient?”</span>
+  </div>
+  <p class="say"><b>Please don’t let this sound bigger than it is</b>We narrowed which
+  <em>patient</em> a login can reach. We did not narrow which <em>staff role</em> can reach what.
+  That is scheduled, and we would rather say so now.</p>
+</section>
+
+<!-- 13 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="tab"><b>What we need from you</b></div>
+  <h2>Three things, and only one is engineering.</h2>
+  <div class="cols">
+    <div class="card alert">
+      <h4>1 · Rotate four credentials</h4>
+      <p>The database password, clearinghouse key, session secret and AI key. They are in the
+      repository’s history and on every copy anyone has ever made. Removing them from the current
+      version does not undo that — <strong>only changing them does.</strong></p>
+    </div>
+    <div class="card">
+      <h4>2 · Sign the AWS agreement</h4>
+      <p>A Business Associate Agreement with Amazon, so patient data may legally be processed by
+      their AI service. Everything is built and tested; this is a signature, not a build.</p>
+    </div>
+    <div class="card">
+      <h4>3 · A conversation with the front desk</h4>
+      <p>Coverage now arrives shortly after registration instead of holding it up. Staff need to
+      know that “checking” is not “a problem”, and that a last-known status is usable but
+      provisional. That is a workflow change, and it is theirs to shape.</p>
+    </div>
+  </div>
+  <div class="verdict warn">One question we cannot answer for you: whether anyone ever used the
+  chart access we found. Your audit table can be edited and deleted, so it cannot tell us. That
+  is its own finding, and it is why we would treat this as a risk assessment rather than assume
+  the answer.</div>
+</section>
+
+<!-- 14 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="tab"><b>The last thing</b></div>
+  <h2>You didn’t ask us to look for any of this.</h2>
+  <p class="lede">Every one of the six findings came out of the files handed over on day one —
+  a browser recording, a support ticket, a vendor’s status page, a spreadsheet of patients, a
+  test file. Nothing was hidden. Nobody had read them against each other.</p>
+  <div class="figs">
+    <div class="fig"><span class="n">4</span><span class="k">Features delivered</span></div>
+    <div class="fig"><span class="n alert">6</span><span class="k">Problems found</span></div>
+    <div class="fig"><span class="n good">231</span><span class="k">Automated checks, all passing</span></div>
+    <div class="fig"><span class="n good">$0</span><span class="k">Spent on AI to build and prove it</span></div>
+  </div>
+  <p class="say"><b>The one to remember</b>Your search scored perfectly. That is what made it
+  dangerous — the score was answering a question nobody had checked was the right one.</p>
+</section>
+
+</div>
+
+<footer>
+  Riverbend Community Health · Weeks 1–4 · Every figure computed from the client’s own handover
+  data. Findings, decision records and reproduction steps are in the repository under
+  <span class="mono">docs/findings/</span> and <span class="mono">adr/</span>.
+</footer>
