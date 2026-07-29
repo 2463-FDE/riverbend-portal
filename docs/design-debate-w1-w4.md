@@ -253,3 +253,253 @@ And a second, aimed at ourselves:
 > **"What did we add this week that we'd have to defend in a review as necessary rather than interesting?"**
 
 The answer is allowed to be "nothing." It is not allowed to be unexamined.
+
+---
+
+# Part II — the UI phase
+
+**Date:** 2026-07-29, after PRs #13–#16 merged
+**Trigger:** the client asked why the demo was a Python script. The honest answer
+was that four weeks shipped as gateway endpoints with **zero lines of
+`frontend/`**, and a terminal script let that go unnamed.
+
+The standing question above was answered wrongly four times. Every PR claimed
+"what the client can see" and described an API. The bodies of #13–#16 have been
+corrected in place rather than quietly left.
+
+---
+
+## UI-D1 — Folding mechanic: four new PRs, or rewrite history into four?
+
+**PE:** The client said fold it into the four PRs. Four PRs means four PRs.
+
+**SE:** Those four are merged. To literally get four, I have to reset the
+integration branch, rebuild each week's commit with UI folded in, and force-push.
+That discards the review history of #13 through #16.
+
+**PE:** Which matters why? Nobody outside the team reads a merged PR.
+
+**SE:** Because of what we have spent four weeks telling this client. We wrote a
+finding saying their audit log cannot answer "who viewed this patient", and
+another saying a claim they cannot evidence is worse than a control they are
+missing. Then we would delete our own review trail to make a branch look tidier.
+I would rather have eight PRs and be able to answer "who reviewed the
+authorization gate, and when."
+
+**PE:** Then the unit of review has to stay the week, or we have lost the thing
+the client actually asked for — they want to see W1, W2, W3, W4, not "backend"
+and "frontend."
+
+**SE:** Agreed, and that is a naming problem, not a history problem.
+
+> **DECISION UI-D1.** Four new PRs, `#17`–`#20`, each titled as its week's second
+> half. The review unit stays the week. **Rejected:** force-pushing the
+> integration branch into four commits.
+> **Cost accepted:** eight PRs instead of four. Confirmed with the client.
+
+---
+
+## UI-D2 — How far does principal-awareness go?
+
+**PE:** A patient logs in and lands on their own record. That is the Week-4 ask,
+finally visible.
+
+**SE:** That is a second application. Different navigation, different landing,
+different empty states, different error copy. We could spend this entire phase on
+routing and ship no screens.
+
+**PE:** Or we ship the screens and patients see the front desk's navigation,
+which is worse than useless — it is confusing and it exposes internal workflow.
+
+**SE:** Then define the smallest thing that is not confusing. What actually
+differs?
+
+**PE:** Three things. Which nav items exist. What the landing page shows. Whether
+there is a patient picker.
+
+**SE:** That is a hook and two conditionals. I will take that. What I will not
+take is a second layout, a second shell, or a route group split — those are the
+things that double the surface and never come back.
+
+> **DECISION UI-D2.** One shell. One `usePrincipal()` hook reading `patient_id`
+> off the session, returning `{ kind, patientId, canIngest }`. It drives nav
+> visibility, the landing view, and whether a picker renders. **Rejected:** a
+> separate patient layout or App Router route group.
+
+---
+
+## UI-D3 — The dashboard defect: fix now or fix in W4?
+
+**SE:** `app/page.tsx` hard-codes `DEFAULT_PATIENT_ID = "1042"`. After #16, the
+seeded account `james.obrien` is bound to chart 1043, so his dashboard now fetches
+1042, gets a 404, and renders empty. `maria.gonzalez` works by coincidence.
+
+**PE:** So one of two demo accounts is broken. That is W4's screen work.
+
+**SE:** It is not a screen gap, it is a regression we shipped. We changed a
+backend contract and left a seeded account non-functional. Stacking three more
+PRs on top of that is exactly the habit we criticised the contractor for.
+
+**PE:** Fixing it properly means the principal work, which is W4.
+
+**SE:** Fixing it *properly* does. Fixing it *correctly* means reading the
+patient id from the session instead of a constant — four lines. The full
+principal-aware shell can still be W4.
+
+> **DECISION UI-D3.** `#17` carries the minimal correction: the dashboard reads
+> the session's `patient_id`, and staff get a picker. `#20` does the full
+> principal-aware shell. The branch is never knowingly broken between PRs.
+
+---
+
+## UI-D4 — What the patient is told about their own fragmentation
+
+This was the longest argument and it is not really an engineering one.
+
+**PE:** Maria's record spans three charts. The assembled view says so. That is
+transparency and it is the finding made real.
+
+**SE:** Careful. There is a difference between "this record brings together three
+charts" and "one of your charts records a penicillin allergy that the other two
+do not." The second sentence is a clinical communication, delivered by a web page,
+to a patient, with no clinician present.
+
+**PE:** She has a right to her own record. Withholding it is paternalistic.
+
+**SE:** I am not proposing withholding anything — every record we are authorised
+to show, we show. I am saying we should not *editorialise* about what the
+discrepancy means. "Chart 1042 is missing your allergy" is an interpretation, and
+if it is wrong, or right in a way she does not have context for, we have caused
+harm from a UI string.
+
+**PE:** So where is the line?
+
+**SE:** Show the fact, not the inference. "This record brings together 3 charts we
+believe belong to the same person" is a fact about our system. "Your allergy is
+missing from two of them" is a clinical claim.
+
+**PE:** Then the client has to own the wording.
+
+**SE:** Yes — and that is the right outcome. We are not qualified to write it and
+we should say so rather than quietly picking something.
+
+> **DECISION UI-D4.** The assembled view states the neutral system fact only:
+> *"This record brings together N charts that appear to be the same person."*
+> It does **not** tell the patient which chart is missing what. The exact wording
+> is flagged to the client as theirs to approve, in the PR and the finding.
+> The full discrepancy detail remains visible to **staff**, where a clinician can
+> act on it.
+
+---
+
+## UI-D5 — The free-text patient ID box
+
+**SE:** `records/page.tsx` has an input where you type a patient number and press
+Load. That is the IDOR's user interface. The backend now refuses unauthorised
+ids, so it is no longer a vulnerability — but it is still an affordance that
+teaches ID-guessing as a workflow.
+
+**PE:** Staff genuinely need to look up patients. Removing lookup is not an option.
+
+**SE:** Lookup is not the problem. *Lookup by guessing a sequential integer* is
+the problem. There is already a `GET /patients?q=` endpoint doing name search, and
+the portal already proxies it.
+
+**PE:** So it is a better tool anyway.
+
+**SE:** It is. But I want this stated precisely in the PR, because it is easy to
+oversell: **replacing the box is UX hardening, not a security fix.** The gate is
+the gate. If someone later re-adds an ID field, nothing becomes insecure — it just
+becomes ugly again.
+
+> **DECISION UI-D5.** Replace the free-text id input with a name-search picker
+> backed by the existing `/patients?q=` route. Documented as UX hardening, not a
+> control. The two stale comments claiming "the backend performs no ownership
+> check" are corrected in `#20`.
+
+---
+
+## UI-D6 — How much of the eval report becomes a screen?
+
+**PE:** All of it. It is the strongest thing we found.
+
+**SE:** The report has four standard metrics, six integrity numbers, per-case
+detail and three warnings. Rendered flat, that is a wall of figures and the
+finding drowns in it. The reason the terminal version lands is that it is *read
+aloud in a specific order*.
+
+**PE:** Then keep the order.
+
+**SE:** More than that — the finding is a *juxtaposition*. Recall 1.0 next to
+fragment coverage 0.556. If those two numbers are not adjacent and the same size,
+we have rendered a dashboard instead of an argument.
+
+> **DECISION UI-D6.** `/knowledge/quality` leads with the two numbers side by
+> side, same size, adjacent. Then the identity-split table. Then the
+> clinically-incomplete case. Everything else collapses behind "full report".
+> Progressive disclosure with the argument on top, not a metric grid.
+
+---
+
+## UI-D7 — What each test tier is allowed to prove
+
+**PE:** The Playwright journey should cover the withheld-summary case. It is the
+most important state in Week 1.
+
+**SE:** It cannot, honestly. The stub model is deliberately grounded — it derives
+its answer from the source text — so it will not produce an ungrounded summary to
+be withheld. To force it in a browser I would have to set the grounding threshold
+to something impossible via a compose override, and then the journey proves
+nothing about the guardrail. It proves I can misconfigure a threshold.
+
+**PE:** So the state goes untested?
+
+**SE:** No. It goes tested at the tier that can actually test it. Given a withheld
+API response, does the panel render the safe message and the review flag rather
+than raw model text? That is a component test, it is deterministic, and it runs in
+CI in milliseconds. The guardrail *logic* already has its own Python test against
+the real hallucination transcript.
+
+**PE:** And Playwright covers?
+
+**SE:** The journeys — that a real browser, against the real stack, can complete
+each week's task. Not every state. Contorting an E2E to reach a state it cannot
+naturally produce is how suites become slow and false.
+
+> **DECISION UI-D7.** Vitest covers **states** (withheld, stale, refused,
+> unavailable, denied). Playwright covers **journeys** (one per week, happy path,
+> against the running stack). Neither is asked to do the other's job, and ADR 0013
+> records what each does *not* prove.
+
+---
+
+## UI-D8 — Can the Playwright gate be as strong as the `--live` gate?
+
+**PE:** Same pattern as the backend — make it impossible to run accidentally.
+
+**SE:** I will not claim equivalence, because it is not true. The `--live` gate
+protects against *spending money*, and a pytest collection hook survives a `-m`
+override. Playwright here spends nothing — the stack runs in stub mode. The only
+cost of running it accidentally is time.
+
+**PE:** So a weaker gate is fine?
+
+**SE:** A weaker gate is *appropriate*. What matters instead is the failure mode:
+a developer who runs it without the stack up should get "run `make up` first",
+not twenty mystery timeouts.
+
+> **DECISION UI-D8.** Playwright lives in a separate npm script, excluded from
+> the default CI job. **Not** claimed as equivalent to the `--live` gate — the
+> risk is time, not money, and the ADR says so. A `globalSetup` probe fails fast
+> with an actionable message when the stack is down.
+
+---
+
+## Standing question, restated for this phase
+
+The original still applies, with one addition forced by how we got here:
+
+> **"Can a person do this thing in a browser, and did we watch them do it?"**
+
+An endpoint that returns the right JSON is not a delivered feature. We answered
+that question wrongly four times, and the corrections are in the PR bodies.
