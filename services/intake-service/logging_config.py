@@ -29,7 +29,14 @@ def configure(service_name: str) -> logging.Logger:
 
     # File handler — repo-level logs/<service>.log. Create the directory robustly
     # so the container does not crash at startup on a fresh volume.
-    logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "logs"))
+    #
+    # LOG_DIR override (W3): the test suite points this at a temp directory.
+    # Without it, running `pytest` appends real-shaped SSNs to a TRACKED file --
+    # which is debt D1 demonstrating itself, and is not something CI should do to
+    # the repository. Production behaviour is unchanged when LOG_DIR is unset.
+    logs_dir = os.getenv("LOG_DIR") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+    )
     os.makedirs(logs_dir, exist_ok=True)
     file_handler = logging.FileHandler(os.path.join(logs_dir, service_name + ".log"))
     file_handler.setFormatter(fmt)

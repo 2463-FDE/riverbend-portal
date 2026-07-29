@@ -103,3 +103,53 @@ Adding a document to the knowledge base is gated on a `knowledge_admin`
 capability, enforced at the gateway via an env allowlist. This is **not**
 least-privilege and does **not** resolve D7 (role bloat) — it is a capability
 bolted beside a role model that cannot express capabilities yet. W9 replaces it.
+
+---
+
+## Week 3 detail
+
+### D4 / twist #7 — the availability cliff → `partial` (eligibility path fixed)
+`check.py` called the payer with no timeout, no retry, no breaker and no cache,
+and `intake-service` called it **inline on the registration request thread**.
+When the clearinghouse degraded Tuesday 09:02–09:21, every registration inherited
+the hang and the front desk could not register anyone for nineteen minutes.
+
+**RIV-088 and RIV-141 are the same defect** at two severities — closing the first
+cosmetically would leave the second live.
+
+Fixed: registration no longer waits for the payer; the payer call is async,
+5-second bounded, circuit-broken at 5 consecutive failures with a 30-second
+cooldown, and backed by a 24-hour last-known cache. Replaying the 19-minute
+outage costs registration nothing.
+
+**Still open:** `interop-service` has the same synchronous shape on the HL7 path
+(W6).
+
+**Full finding:** `docs/findings/w3-eligibility-availability-cliff.md`
+**ADR:** `adr/0008`
+
+### New in W3 — an observability gap, named
+Nobody was alerted on Tuesday. The incident was found by the front desk, reported
+as a UI freeze, and reconstructed weeks later from a *vendor's* status page. W3
+produces the evidence; **W7 owns the fix.** `GET /breaker` on eligibility-service
+is the seam alerting hangs off.
+
+### New in W3 — a process change the front desk needs to hear about
+Eligibility is now eventually consistent. `pending` means *checking*, `stale`
+means *true earlier today, payer currently unreachable*, `unknown` means *proceed
+and mark unverified*. **`unknown` is not `inactive`** — the API returns
+`active: null` rather than `false`, because conflating "we could not check" with
+"not covered" is how a covered patient gets turned away.
+
+### New in W3 — one place where PHI at rest IS encrypted
+Agent conversation state contains what staff typed, which contains patient names.
+The production checkpointer uses `EncryptedSerializer`. Worth noting precisely
+because it contrasts with D3: this is the only store in the system where
+encryption at rest is actually implemented rather than asserted.
+
+### New in W3 — a disclosure path held closed
+Staff free-text contains patient names, and regex scrubbing does not catch names
+(recorded as a W1 limitation; here it becomes material). Third-party tracing
+therefore requires **both** an explicit flag and a key — a stale ambient env flag
+cannot start shipping prompt bodies off-box. Enabling it needs a BAA covering the
+trace vendor, or name detection on this path.

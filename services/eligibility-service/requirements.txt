@@ -1,4 +1,10 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
+
+# W3: the payer call is now async and timeout-bounded (adr/0008). httpx replaces
+# requests, which has no async client. `requests` stays pinned only because
+# check.py -- the inherited implementation -- is kept in the tree, unused, so the
+# diff shows what was replaced.
+httpx==0.28.1
 requests==2.32.3

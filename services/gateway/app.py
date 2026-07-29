@@ -226,6 +226,12 @@ def proxy_ai_summary(payload: dict, session: dict = Depends(require_session)):
 # the knowledge-admin capability (authz.py): one bad document silently changes
 # every future grounded answer, so it is not part of the blanket `staff` role.
 # --------------------------------------------------------------------------- #
+@app.post("/ai/agent/eligibility")
+def proxy_agent_eligibility(payload: dict, session: dict = Depends(require_session)):
+    """Front-desk eligibility assistant (W3). Session-guarded like everything else."""
+    return _post("ai", "/agent/eligibility", payload)
+
+
 @app.post("/ai/knowledge/query")
 def proxy_kb_query(payload: dict, session: dict = Depends(require_session)):
     return _post("ai", "/query", payload)

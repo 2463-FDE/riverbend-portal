@@ -23,10 +23,17 @@ file keep working — they hold their own references — so this is safe per-loa
 import importlib.util
 import os
 import sys
+import tempfile
 
 import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# intake-service writes full request bodies to a repo-level log file (debt D1).
+# Running the suite would therefore append SSN-shaped test data to a TRACKED
+# file. Redirect it before any service module is imported. This is test hygiene,
+# not a fix for D1 -- that is W7, and the finding stands.
+os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="riverbend-test-logs-"))
 
 
 # --------------------------------------------------------------------------- #
