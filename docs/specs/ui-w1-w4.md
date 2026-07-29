@@ -53,6 +53,30 @@ reach is how the gap survived four reviews.
 | `RVB-U-05` | Playwright stays out of the default CI job. **Not** claimed as equivalent to the `--live` gate — that one protects money, this one protects time. | UI-D8 |
 | `RVB-U-06` | Every default-gate test runs with no AWS credential and no spend. | carried from `RVB-X-04` |
 | `RVB-U-07` | No new runtime dependency in `frontend/package.json`. Test tooling is `devDependencies` only. | UI-D5 |
+| `RVB-U-08` | **Deploying this phase requires invalidating existing sessions.** A token issued before #16 carries no `patient_id`, so the *gateway* resolves it as a **staff** principal — a patient holding an old token retains staff scope at the backend. That is not a UI concern and cannot be fixed in the UI. | codex R-P1-3; `docs/findings/w4-no-automatic-logoff.md` |
+| `RVB-U-09` | **The gateway must preserve upstream HTTP status.** `_post`/`_get` (`services/gateway/app.py:383`) return `r.json()` and discard `r.status_code`, so a downstream 422 or 503 reaches the browser as **HTTP 200 with an error body**. Fixed in `#17`, with tests. | codex R-P1-8 |
+
+> **Scope note on `RVB-U-09`:** gateway-**raised** exceptions
+> (`require_patient_access` → 404, `require_session` → 401,
+> `authz.require_ingest` → 403) are raised *before* the proxy call and already
+> carry their status. Only **downstream** service errors flatten. Verified — so
+> the IDOR 404 the whole of W4 rests on is unaffected, but every service-level
+> failure currently looks like success to the UI.
+
+### Backend changes that live inside UI PRs
+
+Four, each a precondition for a UI state being renderable or correct. Named here
+rather than smuggled in under a frontend heading:
+
+| Change | PR | Why it cannot wait |
+|---|---|---|
+| Gateway preserves upstream status (`RVB-U-09`) | `#17` | Every subsequent UI error state depends on telling failure from success |
+| `/ai/health` route exposing the retention block | `#17` | `RVB-W1-U3` must disable submit *before* a request |
+| `checked_at_display` on the agent response | `#19` | `RVB-W3-U2` has no timestamp to render otherwise |
+| `load_demographics(ids, audience)` | `#20` | UI-D4 cannot be honoured client-side |
+
+`RVB-W3-U7` (the intake payload) is a **frontend** fix to an inherited defect, not
+a backend change.
 
 ---
 
@@ -62,21 +86,55 @@ reach is how the gap survived four reviews.
 
 ```ts
 type Principal =
-  | { kind: "patient"; patientId: number; canIngest: boolean }
-  | { kind: "staff";   patientId: null;   canIngest: boolean };
+  | { kind: "patient"; patientId: number | null; canIngest: boolean }
+  | { kind: "staff";   patientId: null;          canIngest: boolean };
+
+type PrincipalState =
+  | { status: "loading" }
+  | { status: "ready"; principal: Principal };
 ```
 
 Read from the session (`PortalUser.patient_id`, added to `app/lib/types.ts`) and
 refreshed from `GET /api/me`, which already returns `patient_id`, `scope` and
 `can_ingest` — added in #16 and #14 respectively and currently unused.
 
-**The hook decides three things and nothing else** (UI-D2): which nav items
-render, what the landing page shows, and whether a patient picker appears.
+**The hook decides four things and nothing else** (UI-D2, ADR 0012): which nav
+items render, what the landing page shows, whether a patient picker appears, and
+whether the knowledge-ingest control is visible.
 
-> A malformed or absent `patient_id` resolves to **staff**, matching
-> `services/gateway/scope.py`. The UI must never invent a patient identity — and
-> because the gateway re-derives the scope server-side on every request, a wrong
-> guess here is a cosmetic bug, not a security one. That asymmetry is deliberate.
+### The fallback must mirror `scope.py` exactly
+
+An earlier draft of this spec said *"malformed or absent `patient_id` resolves to
+staff"*. **That was wrong, and it described a privilege escalation.**
+`services/gateway/scope.py:86` actually does this:
+
+| Session `patient_id` | Backend resolves to | UI must resolve to |
+|---|---|---|
+| absent / `""` / `"None"` | **staff**, `open_to_context=true` | staff |
+| present but unparseable | **patient with an empty id set** — permitted nothing | patient, `patientId: null` |
+| present and valid | patient, own id + `SAME_AS` fragments | patient with that id |
+
+> ```python
+> except (TypeError, ValueError):
+>     # A malformed session is not a licence to see everything.
+>     return AuthorizedScope(principal=PRINCIPAL_PATIENT, username=username)
+> ```
+
+The backend **fails closed**. A UI built to the old wording would have shown staff
+navigation to a principal the gateway treats as a patient who can see nothing.
+
+### Loading is a real state
+
+`localStorage` is `null` server-side (`app/lib/session.ts:12`) and `AppShell`
+already hydrates in a `useEffect` (`AppShell.tsx:81`). Reading storage during
+render causes hydration drift; defaulting to staff **flashes staff navigation to
+a patient**. Callers render a skeleton until `status === "ready"`.
+
+> Because the gateway re-derives the scope server-side on every request, a wrong
+> guess in the UI is a cosmetic bug rather than a security one — **provided the
+> session itself is correct.** That proviso is not free: a token issued before
+> #16 carries no `patient_id` and the *gateway* resolves it as staff. See
+> ADR 0012 §2 and `RVB-U-08`.
 
 ---
 
@@ -88,26 +146,39 @@ render, what the landing page shows, and whether a patient picker appears.
 |---|---|---|---|
 | `RVB-W1-U1` | F | `SummaryPanel` on `/intake`: instruction text in, patient-friendly summary out, through `POST /api/ai/summary`. | Component test: given a grounded response, the summary renders. |
 | `RVB-W1-U2` | F | **Withheld state.** When `grounded=false`, the panel renders the safe message and a review flag — **never** the raw model text. | Component test asserts the raw text is absent from the DOM. |
-| `RVB-W1-U3` | F | **Service-disabled state.** When the retention preflight has refused, the panel says the feature is unavailable pending a configuration check, and the submit control is disabled. | Component test. |
+| `RVB-W1-U3` | F | **Service-disabled state.** The panel reads `GET /api/ai/health`'s `retention.ok` on mount; when false it says the feature is unavailable pending a configuration check and **disables submit before any request is made**. | Component test for both `retention.ok` values. The health block already exists on `/healthz`; a gateway route is added to reach it. |
 | `RVB-W1-U4` | C | **Dashboard defect fixed.** `app/page.tsx` reads the patient id from `usePrincipal()`; staff get a picker. `james.obrien` no longer lands on an empty dashboard. | Component test for both principals. |
 | `RVB-W1-U5` | T | **Browser journey:** log in → `/intake` → enter instructions → a grounded summary appears. | Playwright, against `make up`. |
 | `RVB-W1-U6` | T | Test infrastructure: Vitest + Testing Library in the default gate; Playwright configured and excluded from it. | `npm test` green in CI; `npm run test:e2e` not run there. |
 
-### The three states
+### Every state this endpoint can actually produce
 
-| State | Trigger | What the user sees |
-|---|---|---|
-| Grounded | `grounded: true` | The summary, plus a quiet note that it was checked against the source |
-| **Withheld** | `grounded: false`, `needs_review: true` | The safe message, and: *"This summary was held back for review because it contained information not present in the instructions."* **Staff principals additionally see the reason codes** (`invented_medication:metformin`). Patients do not. |
-| Disabled | `usage.refused == "retention_policy"` | *"The summary feature is unavailable pending a data-retention configuration check."* Submit disabled. |
+Enumerated by reading `services/ai-orchestrator/app.py` rather than recalling it.
+An earlier draft named three of these eight; a state with no UI is a blank screen
+in a demo.
 
-**Why the withheld message names a reason at all:** without it, a user retries.
+| # | Trigger | Response shape | What the user sees |
+|---|---|---|---|
+| 1 | Grounded summary | `grounded: true` | The summary, and a quiet note that it was checked against the source |
+| 2 | **Withheld** | `grounded: false`, `needs_review: true` | The safe message, and *"This summary was held back for review because it contained information not present in the instructions."* |
+| 3 | Retention refused | `usage.refused == "retention_policy"` | Unavailable pending a configuration check. Also caught ahead of time by `RVB-W1-U3`. |
+| 4 | Too short | `usage.refused == "source_too_short"` | Inline hint on the field — not an error banner |
+| 5 | Over budget | `usage.refused == "budget"` | *"That text is too long to summarise."* Actionable, not a stack trace. |
+| 6 | Guardrail blocked | `usage.refused == "guardrail_blocked"` | Same surface as **2** — the user does not need to know which layer held it |
+| 7 | Model unavailable | `usage.refused == "model_unavailable"` | *"Temporarily unavailable, please try again shortly."* Retry offered. |
+| 8 | Validation / transport | HTTP 422, or a `{"error": …}` body from the gateway proxy | Generic failure with retry. **See `RVB-U-09`** — until the gateway preserves upstream status, some of these arrive as HTTP 200. |
+
+**Why the withheld message names a reason at all:** without it a user retries.
 Retries cost money and produce the same result. Telling them it was *held*, not
 *failed*, ends the loop.
 
-**Why reason codes are staff-only:** `invented_medication:metformin` is a clinical
-string. Shown to a patient with no context it is alarming; shown to a staff member
-it is actionable. Same split as UI-D4.
+**Reason codes are NOT shown — the field does not exist.** An earlier draft had
+staff seeing `invented_medication:metformin`. `SummaryResponse` carries only
+`request_id, summary, grounded, needs_review, model, stubbed, usage`; the
+guardrail reasons go to the **audit event** and nowhere else. Adding them to the
+response would return clinical strings to patients as well, and hiding them in
+React would be exactly the theatre UI-D4 rejects. They stay in the audit log,
+which is where an operator should be reading them anyway.
 
 **Explicitly not in `#17`:** a review queue for flagged summaries. `needs_review`
 currently routes nowhere. Named here; it belongs with W7's observability work.
@@ -121,11 +192,23 @@ currently routes nowhere. Named here; it belongs with W7's observability work.
 | ID | Type | Requirement | Acceptance |
 |---|---|---|---|
 | `RVB-W2-U1` | F | `/knowledge` — question in, answer out with citations resolving to named sources. | Component test. |
-| `RVB-W2-U2` | F | **A refusal is a first-class answer, not an error.** No red styling, no retry prompt: *"I don't have that in the knowledge base."* | Component test asserts refusal renders in the answer slot, not an alert. |
+| `RVB-W2-U2` | F | **A refusal is a first-class answer, not an error.** No red styling, no retry prompt. | Component test asserts the refusal renders in the answer slot, not an alert — and asserts against **`rag_graph.REFUSAL`**, not a transcription of it. An earlier draft of this spec quoted the string slightly wrong (*"I don't have that in the knowledge base"* vs the actual *"…that information in the…"*), which would have baked a false contract into the test. |
 | `RVB-W2-U3` | F | `/knowledge/quality` — the eval report as a screen, **leading with recall and fragment coverage side by side, same size, adjacent**. | Component test asserts both figures render in one group. |
 | `RVB-W2-U4` | F | Below the headline: the identity-split table (the three charts), then the clinically-incomplete case, then everything else collapsed behind "full report". | Component test. |
 | `RVB-W2-U5` | T | **Browser journey:** ask a chart-shaped clinical question, get cited results; the quality screen shows both figures. | Playwright. |
 | `RVB-W2-U6` | C | The ingest control renders only when `/me` reports `can_ingest`. The gateway still enforces; this is visibility. | Component test for both cases. |
+
+### Every state these endpoints produce
+
+| Endpoint | States |
+|---|---|
+| `POST /ai/knowledge/query` | answered with citations · refused below the relevance floor · refused because generation failed (`reason` starts `generation_failed:`) · refused for a missing scope (`ScopeRequired`) · transport error |
+| `GET /ai/knowledge/eval/latest` | a run · **`{metrics: null, note: "no eval has been run in this process"}`** — the first-load state, which needs an empty view rather than a crash |
+| `POST /ai/knowledge/eval` | a full run · transport error |
+
+The `metrics: null` case is the one a demo hits first: the quality screen is
+opened before any eval has been run in that process. It renders a "run the
+evaluation" prompt, not an error.
 
 ### Why the layout is prescribed
 
@@ -143,11 +226,12 @@ so a later "let's tidy the metrics grid" cannot quietly remove it.
 | ID | Type | Requirement | Acceptance |
 |---|---|---|---|
 | `RVB-W3-U1` | F | `CoverageChip` — an `rb-badge` variant for `active` / `inactive` / `pending` / `unknown`. | Component test, one case per status. |
-| `RVB-W3-U2` | F | **Staleness is impossible to miss.** A stale result renders the status *and* its original timestamp: *"Active — as of 9:02AM"*. | Component test asserts the timestamp is present whenever `stale` is true. |
+| `RVB-W3-U2` | F | **Staleness is impossible to miss.** A stale result renders the status *and* its original timestamp: *"Active — as of 9:02AM"*. **Backend change required:** `POST /agent/eligibility` returns `stale` but no timestamp. `_lookup_eligibility` already computes `checked_at_display` and then discards it — the agent response gains that field. One line, and it keeps the chip reading from a single endpoint rather than joining two. | Component test asserts a timestamp is present whenever `stale` is true, and absent when it is not. |
 | `RVB-W3-U3` | F | `unknown` never renders as "not covered". Distinct copy: *"Could not verify — proceed and mark unverified."* | Component test asserts `unknown` and `inactive` render differently. |
 | `RVB-W3-U4` | F | `/eligibility` — the front-desk assistant, visit-scoped. When a reply was **overridden** for contradicting the tool, the UI shows the tool's result was used. | Component test. |
-| `RVB-W3-U5` | T | **Browser journey:** with `eligibility-service` stopped, check coverage → the chip reads stale with a timestamp, and registration still completes. | Playwright. |
+| `RVB-W3-U5` | T | **Browser journey:** with `eligibility-service` stopped, check coverage → the chip reads stale with a timestamp, and registration still completes. **Must assert a latency budget AND `eligibility.status === "pending"`** — without both it does not prove decoupling, only that a page rendered. | Playwright: `POST /intake` completes < 2s with the service down, response carries `status: "pending"`. |
 | `RVB-W3-U6` | F | `/intake` renders `pending` on submit — the visible half of the W3 decoupling. | Component test. |
+| `RVB-W3-U7` | D | **Inherited defect, fixed here.** `app/intake/page.tsx:77` sends `demographics.first_name` / `last_name` and boolean consents; `services/intake-service/schemas.py:7` requires `demographics.name` (not-blank validated) and `consents: list[str]`. **The intake form has never successfully submitted against this backend.** Not introduced by this engagement, but `RVB-W3-U6` sits directly on it and would otherwise pass only against mocks. | The journey in `RVB-W3-U5` submits the real form against the real service. |
 
 ### Status → token mapping
 
@@ -173,20 +257,57 @@ avoiding.
 |---|---|---|---|
 | `RVB-W4-U1` | F | Principal-aware nav: patients do not see Intake or Release of Information. | Component test for both principals. |
 | `RVB-W4-U2` | F | Patient landing shows their assembled record across the four domains. | Component test. |
-| `RVB-W4-U3` | C | **The fragmentation note states the system fact only:** *"This record brings together N charts that appear to be the same person."* It does **not** tell the patient which chart is missing what. Discrepancy detail remains staff-only. | Component test asserts patient view contains the neutral note and **not** the per-chart discrepancy. |
-| `RVB-W4-U4` | F | A domain that failed renders as unavailable and named — never silently omitted. | Component test. |
-| `RVB-W4-U5` | F | `/approvals` — the HITL queue. Approve or deny resumes the paused run. | Component test. |
+| `RVB-W4-U3` | C | **The fragmentation note must be fixed SERVER-SIDE.** `load_demographics` gains an `audience` parameter: a patient gets the neutral count, staff keep the chart-level detail. See below — the backend currently violates UI-D4 and the UI cannot fix it. | Python test: `load_demographics(ids, audience="patient")` contains no chart IDs; `audience="staff"` does. Plus a component test that the patient view renders the neutral note. |
+| `RVB-W4-U4` | F | A domain that failed renders as unavailable and named — never silently omitted. Three statuses exist, not two: `ok`, **`degraded`** (stale coverage), `unavailable`. | Component test, one case per status. |
+| `RVB-W4-U5` | F | The assembled view renders every `released=false` reason distinctly: **denied** (not authorised), **withheld pending approval** (`deny_reason: "withheld_pending_approval"`), and **synthesis failed**. A single "something went wrong" for all three is wrong — one is a permission answer, one is a pending human, one is a fault. | Component test, one case each. |
 | `RVB-W4-U6` | T | **Browser journey:** log in as `maria.gonzalez` → her record shows all three charts including the penicillin allergy → navigating to chart 1043 shows "not found". | Playwright. |
 | `RVB-W4-U7` | F | The free-text patient-ID input is replaced by a **name-search picker** over the existing `/patients?q=` route. | Component test. |
-| `RVB-W4-U8` | D | The two stale comments claiming the backend performs no ownership check (`records/page.tsx`, `api/records/route.ts`) are corrected. | Grep assertion in the test suite. |
+| `RVB-W4-U8` | D | The two stale comments claiming the backend performs no ownership check (`records/page.tsx:16`, `api/records/route.ts:6`) are corrected. **This is a documentation correction and proves nothing about the protection itself** — that is proven by `tests/test_w4_idor_and_graph.py::test_har_walk_is_now_denied`. Cross-referenced so the grep is not mistaken for the control. | Grep assertion. |
 
-### The wording that is not ours to write
+### `/approvals` is cut — there is no contract to build against
+
+An earlier draft specified a HITL approvals queue. **The backend has no way to
+list paused runs.** The gateway exposes `POST /ai/patient-view/{id}/resume` and
+nothing that enumerates what is waiting. A queue screen cannot be built against a
+resume-only endpoint, and inventing a list endpoint inside a UI PR would be
+backend scope arriving under a frontend heading.
+
+**Deferred, with its precondition named:** a `GET /ai/patient-view/pending`
+returning `{thread_id, patient_id, requested_at, reason}` for interrupted runs.
+The day that exists, the screen is straightforward. Resume itself stays reachable
+in `#20` as an API route and a component state on the assembled view, and the
+resume path is asserted by an **API test against the real graph** — a component
+test cannot prove a paused LangGraph run resumes.
+
+This cut also returns `#20` to a plausible size (codex P2-19).
+
+### The wording that is not ours to write — and the backend already broke it
 
 `RVB-W4-U3` is a clinical communication decision wearing a UI costume (UI-D4).
 We show *"this record brings together 3 charts"* — a fact about our system. We do
 **not** show *"chart 1042 is missing your penicillin allergy"* — an interpretation
 a patient may not have context for, delivered by a web page with no clinician
 present.
+
+**The backend already violates that decision.**
+`services/ai-orchestrator/patient_view_loaders.py:74` returns, to a patient:
+
+> This record is spread across 3 charts **(1042, 1330, 1588)**, which appear to
+> be the same person. They have been shown together.
+
+and line 69 builds the synthesis context as
+`f"{p.name} (chart {p.id}), date of birth {p.dob}"` for every fragment — so the
+chart IDs reach the model prompt and the patient-facing summary by a second route.
+Fixing only the note would have left the same content arriving anyway.
+
+**This is not a cross-patient leak.** All three charts belong to the same person;
+it is her own date of birth three times. It is a *clinical-communication* defect,
+not a breach, and calling it a breach would be the overclaiming we criticised in
+the README.
+
+**It must be fixed server-side.** If the API returns it to a patient, it was
+disclosed — hiding it in React is theatre, which is the principle behind cutting
+the staff-only reason codes in `#17` as well.
 
 **The exact wording is flagged to the client as theirs to approve**, in the PR
 body and in `docs/findings/w2-patient-fragmentation.md`. Picking it quietly would

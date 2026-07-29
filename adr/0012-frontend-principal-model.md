@@ -32,11 +32,16 @@ type Principal =
 ```
 
 `usePrincipal()` reads the session and refreshes from `/api/me`. It decides
-**exactly three things**:
+**exactly four things**:
 
 - which nav items render,
 - what the landing page shows,
-- whether a patient picker appears.
+- whether a patient picker appears,
+- whether the knowledge-ingest control is visible (`can_ingest`).
+
+> An earlier draft of this ADR said "three" while the spec already routed
+> `can_ingest` through the hook. Widened here rather than pretending the spec was
+> the outlier — `can_ingest` was always going to live in the same place.
 
 Nothing else branches on principal. A second layout, a second shell, or an App
 Router route-group split were all rejected: they double the surface permanently
@@ -54,8 +59,27 @@ security one.** If `usePrincipal()` mistakenly returns staff for a patient, the
 user sees nav items they should not — and every request they make is still
 refused by the gate. The blast radius of a frontend bug is confusion.
 
-Consequently, a malformed or absent `patient_id` resolves to **staff**, matching
-`services/gateway/scope.py`. The UI never invents a patient identity.
+**That claim holds only if the session itself is correct, and there is a case
+where it is not.** A token issued before #16 carries no `patient_id`, so the
+*gateway* — not the UI — resolves it as a **staff** principal with
+`open_to_context=true`. A patient holding a pre-#16 token therefore retains staff
+scope at the backend. That is a genuine authorisation gap, it cannot be fixed in
+the UI, and it is why **deploying this phase requires invalidating existing
+sessions** (`RVB-U-08`). Flushing them is awkward precisely because sessions never
+expire — which is D10, still open.
+
+The mirror of the backend's fallback, corrected:
+
+| Session `patient_id` | `scope.py` resolves to | The UI must match |
+|---|---|---|
+| absent / `""` / `"None"` | staff, `open_to_context` | staff |
+| present but unparseable | **patient with an empty id set** | patient, `patientId: null` |
+| present and valid | patient + `SAME_AS` fragments | patient with that id |
+
+An earlier draft of this ADR said malformed *or* absent resolves to staff. That
+was wrong in the direction that matters: the backend **fails closed** on a
+malformed value, and describing it as failing open would have had the UI show
+staff navigation to a principal permitted nothing.
 
 ### 3. The dashboard defect is corrected in the first UI PR, not the last
 
