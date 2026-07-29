@@ -24,6 +24,17 @@ class Settings:
     roi_url = os.getenv("ROI_URL", "http://roi-service:8076")
     ai_orchestrator_url = os.getenv("AI_ORCHESTRATOR_URL", "http://ai-orchestrator:8077")
 
+    # W2 — knowledge-base ingest capability (see authz.py). Interim control until
+    # the role-hierarchy migration (D7, W9); the env allowlist exists because the
+    # inherited system has exactly one role and cannot express a capability.
+    knowledge_ingest_users = frozenset(
+        u.strip() for u in os.getenv("KNOWLEDGE_INGEST_USERS", "").split(",") if u.strip()
+    )
+    knowledge_ingest_roles = frozenset(
+        r.strip() for r in os.getenv("KNOWLEDGE_INGEST_ROLES", "knowledge_admin").split(",")
+        if r.strip()
+    )
+
     @property
     def db_url(self) -> str:
         return (

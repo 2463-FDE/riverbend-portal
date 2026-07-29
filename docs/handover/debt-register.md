@@ -14,7 +14,7 @@ this is the document that becomes the Week-10 handoff package.
 | D3 | No field-level encryption; compliance claim contradicts schema | **named** | W1 | W9 | A contradicted claim widens audit scope more than a missing control does |
 | D9 | Live credentials committed to the repo | **partial** | W1 | Tracking fixed W1; **rotation outstanding** | `DB_PASSWORD` is direct access to every chart, bypassing every app control |
 | D4 | Synchronous payer call, no timeout or breaker, on the intake path | open | — | W3 | A payer outage stops patient registration |
-| D5 | No MPI / match key → one patient, several charts | open | — | W2 (ADR only) | Clinician sees an incomplete allergy list |
+| D5 | No MPI / match key → one patient, several charts | **named + measured** | W2 | ADR 0007 (design only) | **Patient safety:** clinician opens a chart with an empty allergy list for a patient with a documented penicillin allergy |
 | D8 | N+1 queries + full-table scan on records search | open | — | W4 (measured) | Latency scales badly with chart volume |
 | D10 | Sessions never expire; no automatic logoff | open | — | W9 | Shared clinical workstations; walk-away exposure |
 | D11 | IDOR on chart reads; sequential ids | open | — | W4 | Any authenticated user can walk the whole patient table |
@@ -63,3 +63,43 @@ share prompts and completions with the model provider and retain them for up to
 refuses to serve unless the effective mode is `none` and the chosen model permits
 zero retention.
 **See:** `adr/0004` §1a, requirement `RVB-X-09`.
+
+---
+
+## Week 2 detail
+
+### D5 / twist #3 — patient fragmentation → `named + measured`
+The handover dump contains Maria Gonzalez as **three charts** (1042, 1330, 1588)
+with identical SSN, MRN, address, phone and member id. Chart 1330 records a
+**penicillin allergy**; the other two record none. Chart 1588's DOB is the same
+date with the day and month transposed, which `dob TEXT` cannot detect.
+
+The contractor's own gold-set encodes the bug as the correct answer — it expects
+*"No known allergies on file."* for Maria Gonzalez. A retriever scoring 100%
+against it tells a clinician she has no allergies.
+
+Our eval harness reports **recall 1.0 alongside fragment coverage 0.556**, plus
+the concrete identity split and the reasons it matched. With the proposed match
+key, the same query on the same corpus recovers the allergy.
+
+**RIV-160 should be re-triaged** from a display bug to a data-integrity defect.
+
+**Full finding:** `docs/findings/w2-patient-fragmentation.md`
+**Proposed remediation:** `adr/0007` (match key on the intake write path; link,
+do not merge; surface near-misses to a human).
+
+### New in W2 — the vector index is a PHI store
+`riverbend_records` holds patient chart text. It is governed like the database:
+queries **must** carry an authorized patient scope, and the adapter raises rather
+than serving an unscoped similarity search. Its backup tarball is a PHI artifact
+and needs the same handling as a database dump (see `docs/runbook.md`).
+
+Note the honest consequence: **D3 (no encryption at rest) now applies in one more
+place than it did before.** We have not made the index safer than the database;
+we have made its status explicit.
+
+### Interim control — knowledge-base ingest capability
+Adding a document to the knowledge base is gated on a `knowledge_admin`
+capability, enforced at the gateway via an env allowlist. This is **not**
+least-privilege and does **not** resolve D7 (role bloat) — it is a capability
+bolted beside a role model that cannot express capabilities yet. W9 replaces it.

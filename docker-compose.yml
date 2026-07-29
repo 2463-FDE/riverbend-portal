@@ -61,6 +61,20 @@ services:
       timeout: 3s
       retries: 5
 
+  chroma:
+    image: chromadb/chroma:1.5.9
+    ports:
+      - "8078:8000"
+    volumes:
+      # Derived data — rebuildable from source documents via
+      # POST /ai/knowledge/seed. See docs/runbook.md before relying on it.
+      - chroma-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v2/heartbeat || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   ai-orchestrator:
     build: ./services/ai-orchestrator
     env_file: .env
@@ -71,8 +85,15 @@ services:
       USE_STUB_BEDROCK: "${USE_STUB_BEDROCK:-true}"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
       BEDROCK_MODEL_ID: "${BEDROCK_MODEL_ID:-us.anthropic.claude-3-5-haiku-20241022-v1:0}"
+      CHROMA_MODE: "${CHROMA_MODE:-http}"
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      RAG_EMBED_BACKEND: "${RAG_EMBED_BACKEND:-offline}"
     ports:
       - "8077:8077"
+    depends_on:
+      chroma:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8077/healthz')\""]
       interval: 10s
@@ -170,3 +191,4 @@ services:
 
 volumes:
   pgdata:
+  chroma-data:

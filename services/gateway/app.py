@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+import authz
 from config import settings
 from db import get_db
 from logging_config import configure
@@ -100,7 +101,14 @@ def logout(authorization: Optional[str] = Header(default=None)):
 
 @app.get("/me")
 def me(session: dict = Depends(require_session)):
-    return {"username": session.get("username"), "role": session.get("role")}
+    return {
+        "username": session.get("username"),
+        "role": session.get("role"),
+        # Surfaced so the portal can show or hide the "Add document" control
+        # without guessing the policy client-side. The gateway stays the single
+        # authority — this is a hint for the UI, not the check.
+        "can_ingest": authz.can_ingest(session),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -209,6 +217,55 @@ def proxy_hl7(payload: dict, session: dict = Depends(require_session)):
 @app.post("/ai/summary")
 def proxy_ai_summary(payload: dict, session: dict = Depends(require_session)):
     return _post("ai", "/summary", payload)
+
+
+# --------------------------------------------------------------------------- #
+# ai — knowledge retrieval (W2)
+#
+# Query / corpus / eval are open to any authenticated session. INGEST is gated on
+# the knowledge-admin capability (authz.py): one bad document silently changes
+# every future grounded answer, so it is not part of the blanket `staff` role.
+# --------------------------------------------------------------------------- #
+@app.post("/ai/knowledge/query")
+def proxy_kb_query(payload: dict, session: dict = Depends(require_session)):
+    return _post("ai", "/query", payload)
+
+
+@app.get("/ai/knowledge/corpus")
+def proxy_kb_corpus(session: dict = Depends(require_session)):
+    return _get("ai", "/corpus")
+
+
+@app.post("/ai/knowledge/eval")
+def proxy_kb_eval(payload: dict, session: dict = Depends(require_session)):
+    return _post("ai", "/eval", payload)
+
+
+@app.get("/ai/knowledge/eval/latest")
+def proxy_kb_eval_latest(session: dict = Depends(require_session)):
+    return _get("ai", "/eval/latest")
+
+
+@app.get("/ai/knowledge/identity-clusters")
+def proxy_identity_clusters(session: dict = Depends(require_session)):
+    return _get("ai", "/identity/clusters")
+
+
+@app.post("/ai/knowledge/ingest")
+def proxy_kb_ingest(payload: dict, session: dict = Depends(require_session)):
+    authz.require_ingest(session)  # 403 unless knowledge admin
+    # Provenance is server-stamped from the session, never client-supplied: a
+    # caller must not be able to attribute their document to someone else.
+    payload = {**payload, "added_by": session.get("username", "")}
+    log.info("kb ingest user=%s title=%s", session.get("username"), payload.get("title"))
+    return _post("ai", "/ingest", payload)
+
+
+@app.post("/ai/knowledge/seed")
+def proxy_kb_seed(session: dict = Depends(require_session)):
+    authz.require_ingest(session)  # seeding writes to the index → gated too
+    log.info("kb seed user=%s", session.get("username"))
+    return _post("ai", "/knowledge/seed", {})
 
 
 # --------------------------------------------------------------------------- #
