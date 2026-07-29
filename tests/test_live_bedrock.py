@@ -203,3 +203,40 @@ def test_L4_live_rag_answer_is_grounded_and_cited(monkeypatch):
     assert out.grounded
     assert out.citations
     assert out.usage.get("est_cost_usd", 0) <= CEILING_PER_TEST_USD
+
+
+# --------------------------------------------------------------------------- #
+# L5 — the eligibility agent, one real turn
+# --------------------------------------------------------------------------- #
+@skip_no_key
+def test_L5_live_agent_calls_its_single_tool(monkeypatch):
+    """One real agent turn against Bedrock, with a faked payer.
+
+    Asserts a tool call actually happened — a model that answers from its priors
+    instead of calling the tool is the failure this whole design guards against.
+    """
+    _require_langchain_aws()
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    agent_mod = load_module(
+        "services/ai-orchestrator/eligibility_agent.py", "live_agent"
+    )
+    monkeypatch.setattr(agent_mod.settings, "use_stub", False)
+
+    from langchain_aws import ChatBedrockConverse
+
+    model = ChatBedrockConverse(
+        model=agent_mod.settings.agent_model_id,
+        region_name=agent_mod.settings.aws_region,
+        max_tokens=512,
+    )
+    agent = agent_mod.EligibilityAgent(
+        eligibility_lookup=lambda _i: {"status": "active", "stale": False},
+        model=model,
+        checkpointer=InMemorySaver(),
+    )
+    turn = agent.turn("live-visit-1", "Please check eligibility for member BCBS4471.")
+    print(f"\n[L5] tool_called={turn.tool_called} status={turn.tool_status} "
+          f"overridden={turn.overridden}\n     {turn.reply[:200]}")
+    assert turn.tool_called, "the agent answered without calling its tool"
+    assert turn.tool_status == "active"

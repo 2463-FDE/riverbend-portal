@@ -385,6 +385,106 @@ def identity_clusters():
     }
 
 
+# =========================================================================== #
+# W3 — the front-desk eligibility assistant.
+#
+# One tool, visit-scoped memory, and a deterministic post-check that the agent
+# never states a coverage status the tool did not return. See adr/0008.
+# =========================================================================== #
+_agent = None
+
+
+def _lookup_eligibility(insurance_id: str) -> dict:
+    """Call eligibility-service. Never raises — `unknown` is a valid answer.
+
+    The resilience (timeout, breaker, last-known cache) lives in
+    eligibility-service where it belongs. This is the transport, and its own
+    failure has to degrade the same way, or we would have moved the availability
+    cliff rather than removed it.
+    """
+    import datetime as _dt
+
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{settings.eligibility_url}/eligibility",
+            params={"insurance_id": insurance_id},
+            timeout=httpx.Timeout(settings.eligibility_timeout_s),
+        )
+        payload = resp.json()
+    except Exception:  # noqa: BLE001
+        return {"status": "unknown", "stale": False,
+                "degraded_reason": "eligibility_service_unreachable"}
+
+    checked_at = payload.get("checked_at")
+    display = ""
+    if checked_at:
+        try:
+            display = _dt.datetime.fromisoformat(
+                str(checked_at).replace("Z", "+00:00")
+            ).strftime("%-I:%M%p on %-d %b")
+        except (ValueError, TypeError):
+            display = str(checked_at)
+    return {**payload, "checked_at_display": display}
+
+
+def get_agent():
+    global _agent
+    if _agent is None:
+        import eligibility_agent
+        eligibility_agent.configure_tracing()
+        _agent = eligibility_agent.EligibilityAgent(
+            eligibility_lookup=_lookup_eligibility
+        )
+    return _agent
+
+
+class AgentTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # thread_id for the checkpointer. A VISIT, not a patient and not a session:
+    # a visit has a natural end, which bounds how long PHI-bearing conversation
+    # state lives.
+    visit_id: str = Field(min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=4000)
+
+
+@app.post("/agent/eligibility")
+def agent_eligibility(req: AgentTurnRequest):
+    rid = uuid.uuid4().hex[:12]
+    if not RETENTION.ok:
+        audit.emit(log, request_id=rid, outcome="refused", reason="retention_policy",
+                   retention_checked=RETENTION.checked)
+        return {"request_id": rid, "reply": (
+            "The assistant is disabled pending a data-retention configuration "
+            "check. Contact your administrator."
+        ), "tool_called": False}
+
+    try:
+        turn = get_agent().turn(req.visit_id, req.message)
+    except Exception as e:  # noqa: BLE001
+        audit.emit(log, request_id=rid, outcome="error", reason=type(e).__name__)
+        return {"request_id": rid, "reply": (
+            "The assistant is temporarily unavailable. You can still check "
+            "coverage directly from the eligibility screen."
+        ), "tool_called": False}
+
+    audit.emit(
+        log, request_id=rid, outcome="ok", model_id=settings.agent_model_id,
+        stubbed=settings.use_stub, retention_checked=RETENTION.checked,
+        reason=turn.override_reason or None,
+    )
+    return {
+        "request_id": rid,
+        "visit_id": turn.visit_id,
+        "reply": turn.reply,
+        "tool_called": turn.tool_called,
+        "tool_status": turn.tool_status,
+        "stale": turn.stale,
+        "overridden": turn.overridden,
+    }
+
+
 def _stub_summary(instructions: str) -> str:
     """A GROUNDED stub: derived from the instructions, so dev output is faithful.
 

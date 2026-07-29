@@ -1,60 +1,105 @@
 """
 eligibility-service — real-time payer eligibility (X12 270/271).
 
-Front desk (and intake-service, inline) hit this before a visit to confirm a
-member's coverage is active. The actual clearinghouse round-trip lives in
-check.py.
+Week 3 rebuild. What changed and why:
 
-Inherited shortcoming (left as-is from the handoff):
-  * D4 — check() calls the payer with no timeout / retry / circuit breaker, and
-    it sits directly on the intake request path (RIV-088). The cohort's fix is to
-    bound that call; we deliberately do NOT add a timeout here.
+The inherited `check.py` had, in its own words, "no timeout, no retry, no circuit
+breaker, no cache" — and `intake-service` called it INLINE on the registration
+request thread. On Tuesday 09:02–09:21 the clearinghouse degraded for nineteen
+minutes and the front desk could not register anyone. Not "eligibility was
+slow" — registration, which has nothing to do with insurance, stopped.
+
+`payer_client.PayerClient` now owns the call: async, timeout-bounded, circuit
+broken, and backed by a last-known cache. **It never raises**, because an
+exception here propagates into `/intake` and rebuilds the outage.
+
+`check.py` is left in place, unused, so the diff shows exactly what was replaced.
 """
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
 
-from check import check
+import payer_client
 from config import settings
 from logging_config import configure
-from schemas import EligibilityResponse
 
 log = configure(settings.service_name)
-app = FastAPI(title="Riverbend eligibility-service", version="1.2.0")
+app = FastAPI(title="Riverbend eligibility-service", version="2.0.0")
+
+_client = payer_client.PayerClient()
+
+
+class EligibilityOut(BaseModel):
+    insurance_id: str
+    status: str                      # active | inactive | unknown
+    active: Optional[bool]           # None when unknown — NOT False
+    payer: Optional[str] = None
+    checked_at: datetime
+    stale: bool = False
+    degraded_reason: str = ""
+    raw_status: Optional[int] = None
+    latency_ms: int = 0
+    message: str = ""
 
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "service": settings.service_name}
+    stats = _client.breaker.stats()
+    return {
+        "status": "ok",
+        "service": settings.service_name,
+        "breaker": {
+            "state": stats.state,
+            "consecutive_failures": stats.consecutive_failures,
+            "trips": stats.trips,
+            "short_circuited": stats.short_circuited,
+        },
+    }
 
 
-@app.get("/eligibility", response_model=EligibilityResponse)
-def check_eligibility(insurance_id: str = Query(...)):
+@app.get("/eligibility", response_model=EligibilityOut)
+async def check_eligibility(insurance_id: str = Query(...)):
+    """Always answers. `unknown` is a valid status, and it is not `inactive`.
+
+    Conflating "we could not check" with "not covered" is how a covered patient
+    gets turned away at the desk, so `active` is None rather than False when the
+    status is unknown. The distinction is the whole reason the field is nullable.
+    """
     insurance_id = (insurance_id or "").strip()
     if not insurance_id:
         raise HTTPException(status_code=422, detail="insurance_id must not be blank")
 
-    checked_at = datetime.now(timezone.utc)
-    try:
-        result = check(insurance_id)
-    except Exception as e:
-        # The payer call failed or hung. There is intentionally no timeout /
-        # circuit breaker yet (D4 — the cohort's fix); surface a clean inactive
-        # response with an error note rather than 500-ing the caller.
-        log.error("eligibility check failed for %s: %s", insurance_id, e)
-        return EligibilityResponse(
-            insurance_id=insurance_id,
-            active=False,
-            payer=settings.payer_name,
-            raw_status=None,
-            checked_at=checked_at,
-            error=str(e),
-        )
+    result = await _client.check(insurance_id)
 
-    return EligibilityResponse(
-        insurance_id=result.get("insurance_id", insurance_id),
-        active=bool(result.get("active")),
-        payer=settings.payer_name,
-        raw_status=result.get("raw_status"),
-        checked_at=checked_at,
+    # PHI-safe: the member id is an identifier, so it is not logged (W1 policy).
+    log.info(
+        "eligibility status=%s stale=%s reason=%s latency_ms=%d breaker=%s",
+        result.status, result.stale, result.degraded_reason or "-",
+        result.latency_ms, _client.breaker.stats().state,
     )
+
+    return EligibilityOut(
+        insurance_id=result.insurance_id,
+        status=result.status,
+        active=result.active,
+        payer=result.payer,
+        checked_at=datetime.fromtimestamp(result.checked_at, tz=timezone.utc),
+        stale=result.stale,
+        degraded_reason=result.degraded_reason,
+        raw_status=result.raw_status,
+        latency_ms=result.latency_ms,
+        message=payer_client.describe(result),
+    )
+
+
+@app.get("/breaker")
+def breaker_state():
+    """Operational visibility on the breaker.
+
+    Nobody was alerted on Tuesday; the incident was found by the front desk and
+    reconstructed by us from a vendor's status page. This endpoint is the seam
+    Week 7's alerting hangs off. Naming that gap is part of this week's finding.
+    """
+    return _client.breaker.stats().__dict__

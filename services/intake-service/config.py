@@ -14,8 +14,11 @@ class Settings:
     db_user = os.getenv("DB_USER", "riverbend_app")
     db_password = os.getenv("DB_PASSWORD", "")
 
-    # downstream eligibility verification (called inline from /intake — RIV-088)
+    # Downstream eligibility verification. As of W3 this is resolved OFF the
+    # registration path (adr/0008); the timeout is a ceiling so a hung downstream
+    # cannot leak background threads either.
     eligibility_url = os.getenv("ELIGIBILITY_URL", "http://eligibility-service:8072")
+    eligibility_timeout_s = float(os.getenv("ELIGIBILITY_TIMEOUT_S", "10"))
 
     # payer settings kept for parity with the legacy module; the real X12 270/271
     # round-trip is owned by eligibility-service.

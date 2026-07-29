@@ -24,3 +24,13 @@ langgraph>=1.0,<2.0
 # and a second wrapper would only add a version-skew surface. See adr/0006 §1
 # (amendment).
 chromadb==1.5.9
+
+# W3: the eligibility agent. `create_agent` (LangChain v1) compiles to a
+# LangGraph runtime, so checkpointing comes for free. NOT create_react_agent,
+# which LangGraph v1 deprecates.
+langchain>=1.0,<2.0
+
+# Durable agent memory. Conversation state contains patient names, so the
+# production checkpointer encrypts at rest via EncryptedSerializer.
+langgraph-checkpoint-sqlite>=3,<4
+pycryptodome==3.21.0

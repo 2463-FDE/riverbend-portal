@@ -138,6 +138,26 @@ class Settings:
     # --- MPI / identity resolution (W2 finding) ---------------------------- #
     mpi_match_threshold = _f("MPI_MATCH_THRESHOLD", 0.7)
 
+    # --- W3: the eligibility agent ----------------------------------------- #
+    eligibility_url = os.getenv("ELIGIBILITY_URL", "http://eligibility-service:8072")
+    eligibility_timeout_s = _f("ELIGIBILITY_TIMEOUT_S", 10.0)
+
+    # Durable, ENCRYPTED checkpoints in production. Conversation state contains
+    # what staff typed, which contains patient names — PHI at rest in a store
+    # this feature created. The failure mode is silent (an unencrypted store
+    # looks identical until someone reads the disk), so a test asserts the
+    # selection rather than trusting the deploy.
+    agent_durable_memory = _b("AGENT_DURABLE_MEMORY", False)
+    agent_checkpoint_path = os.getenv("AGENT_CHECKPOINT_PATH", "/data/agent-checkpoints.db")
+
+    # --- third-party tracing ------------------------------------------------ #
+    # OFF unless BOTH a flag and a key are present. Staff type patient names and
+    # regex scrubbing does not catch names, so a trace sink that uploads prompt
+    # bodies is an un-BAA'd disclosure path for the agent endpoint. See adr/0008.
+    trace_enabled = _b("LANGSMITH_TRACING", False)
+    trace_api_key = os.getenv("LANGSMITH_API_KEY", "")
+    trace_project = os.getenv("LANGSMITH_PROJECT", "riverbend-portal")
+
     # --- data retention (RVB-X-09 — compliance control, not a tunable) ---- #
     # Bedrock resolves the effective mode as the first non-inherit value of
     # (project -> account -> model default). For a PHI workload it must be

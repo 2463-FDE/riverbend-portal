@@ -69,6 +69,26 @@ Tests: `tests/test_w1_phi_boundary.py::test_no_phi_in_any_log_record`,
 `::test_audit_rejects_non_allowlisted_field`,
 `::test_redacting_filter_catches_a_careless_log`.
 
+## A small W3 postscript that makes the point better than we could
+
+While building Week 3 we ran the test suite, and it appended this to the tracked
+`logs/intake-service.log`:
+
+```
+INFO POST /intake body={"demographics":{"name":"Test Patient","dob":"1980-01-01",
+     "ssn":"111-22-3333",...}}
+```
+
+Test data, but SSN-shaped, written into a **file tracked by git**, by nothing more
+deliberate than running `pytest`. Nobody decided that should happen. That is
+exactly how the production log filled up with real ones.
+
+We redirected the test suite's log output to a temp directory (`LOG_DIR`).
+Production behaviour is unchanged and **D1 is still open** — this is test hygiene,
+not a fix. But it is worth recording as the clearest available illustration of
+why the current design is a problem: the leak does not require anyone to make a
+mistake.
+
 ## What we did NOT do
 
 `intake-service` still logs full request bodies. Changing it means deciding what
