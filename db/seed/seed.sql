@@ -5,20 +5,22 @@
 -- 1588) with the penicillin allergy only under 1330; the double-booked slot
 -- 88231; and the PHI-laden audit_logs rows.
 
-INSERT INTO users (id, username, password_hash, full_name, role, created_at) VALUES
- (1, 'mokonkwo', 'pbkdf2_sha256$260000$riverbend01saltval0$d4W6Mr76sOsF1290B0966R7BiSlcC4CD8wUq2Xo9a3E=', 'Maya Okonkwo (COO)', 'staff', now()),
- (2, 'frontdesk', 'pbkdf2_sha256$260000$riverbend02saltval0$OWsdELUkEqvUoHY2Prx1GBzgckIxBsEEl2CKaCPF1pU=', 'Front Desk (Riverbend Main)', 'staff', now()),
- (3, 'rdelgado', 'pbkdf2_sha256$260000$riverbend03saltval0$T5BDWpCFaqjd8MQdjlkqe8V3lYABrcJa0yeT/Ggkrbc=', 'Rosa Delgado (Registration)', 'staff', now()),
- (4, 'jpark', 'pbkdf2_sha256$260000$riverbend04saltval0$3PrZm0V5n4X/a61MAXyZ2JBNL7cwNc538hFWb2e4K38=', 'Jin Park (Registration)', 'staff', now()),
- (5, 'drpatel', 'pbkdf2_sha256$260000$riverbend05saltval0$uuKpGNin5j5apcw2SjLG3d+Oycox2EGfcC0k4LK//sU=', 'Dr. Anil Patel', 'staff', now()),
- (6, 'drnguyen', 'pbkdf2_sha256$260000$riverbend06saltval0$jcuSkMTcLzR76lH8mCV0H/acttv4fZhlfQBtk53L8S8=', 'Dr. Anita Nguyen', 'staff', now()),
- (7, 'drlee', 'pbkdf2_sha256$260000$riverbend07saltval0$UctW6Cywcmm7N+1eDI0BhNdUyl8Q0gjOUY5HTvO6b6I=', 'Dr. Sandra Lee', 'staff', now()),
- (8, 'billing1', 'pbkdf2_sha256$260000$riverbend08saltval0$rNBze1DjcEp77zjJUWB+T/PsrlRyI+5SE++tDkj1JbQ=', 'Tom Reyes (Billing)', 'staff', now()),
- (9, 'roiclerk', 'pbkdf2_sha256$260000$riverbend09saltval0$E2x4uRjbO3fGyhLOjdhH3x1SKrZ8RPdCbK+IM0ZpN1g=', 'Dana White (ROI Clerk)', 'staff', now()),
- (10, 'labtech', 'pbkdf2_sha256$260000$riverbend10saltval0$foQLZvzL5VE1DicUMngxFRVEoHee5XZqfO2Vkg0Ltkk=', 'Lab Intake', 'staff', now()),
- (11, 'nurse_kc', 'pbkdf2_sha256$260000$riverbend11saltval0$mccK64T/hIlQYtgWgTK7i+DGLH/sftxHqECHgtsexC0=', 'Karen Cole, RN', 'staff', now()),
- (12, 'itadmin', 'pbkdf2_sha256$260000$riverbend12saltval0$IUYsIcUdl0ludp6kkVgRboYSPtmaEoTRZKKT22MqkhI=', 'Helix Support', 'staff', now());
-SELECT setval('users_id_seq', 12, true);
+INSERT INTO users (id, username, password_hash, full_name, role, patient_id, created_at) VALUES
+ (1, 'mokonkwo', 'pbkdf2_sha256$260000$riverbend01saltval0$d4W6Mr76sOsF1290B0966R7BiSlcC4CD8wUq2Xo9a3E=', 'Maya Okonkwo (COO)', 'staff', NULL, now()),
+ (2, 'frontdesk', 'pbkdf2_sha256$260000$riverbend02saltval0$OWsdELUkEqvUoHY2Prx1GBzgckIxBsEEl2CKaCPF1pU=', 'Front Desk (Riverbend Main)', 'staff', NULL, now()),
+ (3, 'rdelgado', 'pbkdf2_sha256$260000$riverbend03saltval0$T5BDWpCFaqjd8MQdjlkqe8V3lYABrcJa0yeT/Ggkrbc=', 'Rosa Delgado (Registration)', 'staff', NULL, now()),
+ (4, 'jpark', 'pbkdf2_sha256$260000$riverbend04saltval0$3PrZm0V5n4X/a61MAXyZ2JBNL7cwNc538hFWb2e4K38=', 'Jin Park (Registration)', 'staff', NULL, now()),
+ (5, 'drpatel', 'pbkdf2_sha256$260000$riverbend05saltval0$uuKpGNin5j5apcw2SjLG3d+Oycox2EGfcC0k4LK//sU=', 'Dr. Anil Patel', 'staff', NULL, now()),
+ (6, 'drnguyen', 'pbkdf2_sha256$260000$riverbend06saltval0$jcuSkMTcLzR76lH8mCV0H/acttv4fZhlfQBtk53L8S8=', 'Dr. Anita Nguyen', 'staff', NULL, now()),
+ (7, 'drlee', 'pbkdf2_sha256$260000$riverbend07saltval0$UctW6Cywcmm7N+1eDI0BhNdUyl8Q0gjOUY5HTvO6b6I=', 'Dr. Sandra Lee', 'staff', NULL, now()),
+ (8, 'billing1', 'pbkdf2_sha256$260000$riverbend08saltval0$rNBze1DjcEp77zjJUWB+T/PsrlRyI+5SE++tDkj1JbQ=', 'Tom Reyes (Billing)', 'staff', NULL, now()),
+ (9, 'roiclerk', 'pbkdf2_sha256$260000$riverbend09saltval0$E2x4uRjbO3fGyhLOjdhH3x1SKrZ8RPdCbK+IM0ZpN1g=', 'Dana White (ROI Clerk)', 'staff', NULL, now()),
+ (10, 'labtech', 'pbkdf2_sha256$260000$riverbend10saltval0$foQLZvzL5VE1DicUMngxFRVEoHee5XZqfO2Vkg0Ltkk=', 'Lab Intake', 'staff', NULL, now()),
+ (11, 'nurse_kc', 'pbkdf2_sha256$260000$riverbend11saltval0$mccK64T/hIlQYtgWgTK7i+DGLH/sftxHqECHgtsexC0=', 'Karen Cole, RN', 'staff', NULL, now()),
+ (12, 'itadmin', 'pbkdf2_sha256$260000$riverbend12saltval0$IUYsIcUdl0ludp6kkVgRboYSPtmaEoTRZKKT22MqkhI=', 'Helix Support', 'staff', NULL, now()),
+ (13, 'maria.gonzalez', 'pbkdf2_sha256$260000$riverbend13saltval0$mIOQEPIzb5EVs9o6nIa7TWzF2dwPOdNjR+XisQSmyRg=', 'Maria Gonzalez', 'patient', NULL, now()),
+ (14, 'james.obrien', 'pbkdf2_sha256$260000$riverbend14saltval0$7TjuYxy15HBKSCME5fR/3J/yR5lTRZoBqEPl+dH3UbE=', 'James O''Brien', 'patient', NULL, now());
+SELECT setval('users_id_seq', 14, true);
 
 INSERT INTO patients (id, mrn, name, dob, ssn, gender, address, phone, email, notes, created_via, created_at) VALUES
  (1042, 'M4471', 'Maria Gonzalez', '1971-03-02', '412-55-9981', 'F', '118 Maple Ave, Beverly Hills, CA 90210', '310-555-0147', 'maria.g@example.com', 'Prefers morning appts.', 'self_service', '2026-06-22 09:14:06'),
@@ -277,6 +279,10 @@ INSERT INTO patients (id, mrn, name, dob, ssn, gender, address, phone, email, no
  (1850, 'M4592', 'Aisha Moore', '1980-07-11', '298-93-4077', 'X', '3393 2nd St, Beverly Hills, CA 90210', '310-555-2642', 'aisha.moore66@example.com', 'Spanish-speaking.', 'front_desk', '2023-10-15 00:00:00'),
  (1851, 'M1877', 'Andre White', '1946-02-06', '291-74-3399', 'M', '8290 Pine St, Beverly Hills, CA 90210', '310-555-9624', 'andre.white71@example.com', 'Prefers afternoon appts.', 'front_desk', '2022-10-07 00:00:00');
 SELECT setval('patients_id_seq', 1851, true);
+
+-- W4/adr-0011: bind patient-portal logins to the chart they own.
+UPDATE users SET patient_id = 1042 WHERE username = 'maria.gonzalez';
+UPDATE users SET patient_id = 1043 WHERE username = 'james.obrien';
 
 INSERT INTO providers (id, name, specialty, location) VALUES
  (1, 'Dr. Anil Patel', 'Family Medicine', 'Riverbend Main'),

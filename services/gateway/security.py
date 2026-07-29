@@ -49,10 +49,25 @@ def _redis():
     return _redis_client
 
 
-def create_session(username: str, role: str) -> str:
+def create_session(username: str, role: str, patient_id: int | None = None) -> str:
+    """Issue a session token.
+
+    W4 / adr/0011: the session now carries `patient_id` when the account is a
+    patient-portal login. It is read from the `users` row at login and is
+    SERVER-DERIVED — a request can never assert its own patient identity, because
+    that would reintroduce the IDOR through the front door.
+
+    Still inherited, still open: no expiry / TTL is set, so sessions never
+    expire (D10, 164.312(a)(2)(iii)). A deploy of this change should invalidate
+    existing sessions, since tokens issued before it carry no patient_id and
+    resolve as staff principals. That is the safe direction, but it is awkward
+    precisely BECAUSE sessions never expire.
+    """
     token = uuid.uuid4().hex
-    # NOTE: no expiry / TTL is set, so sessions never expire.
-    _redis().hset(f"session:{token}", mapping={"username": username, "role": role})
+    mapping = {"username": username, "role": role}
+    if patient_id is not None:
+        mapping["patient_id"] = str(int(patient_id))
+    _redis().hset(f"session:{token}", mapping=mapping)
     return token
 
 

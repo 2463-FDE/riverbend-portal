@@ -62,14 +62,29 @@ USERS = [
     ("nurse_kc",  "Karen Cole, RN"),
     ("itadmin",   "Helix Support"),
 ]
-emit("INSERT INTO users (id, username, password_hash, full_name, role, created_at) VALUES")
+# W4 / adr/0011: patient-portal accounts, each bound to the chart it owns.
+#
+# maria.gonzalez is bound to 1042 ON PURPOSE -- the fragment WITHOUT the
+# penicillin allergy. She logs in and sees a chart missing her own allergy until
+# the SAME_AS link spans her three fragments, which makes the W2 finding visible
+# from the patient side rather than only in an eval report.
+PATIENT_USERS = [
+    ("maria.gonzalez", "Maria Gonzalez", 1042),
+    ("james.obrien",   "James O'Brien",  1043),
+]
+
+emit("INSERT INTO users (id, username, password_hash, full_name, role, patient_id, created_at) VALUES")
 rows = []
 for i, (uname, full) in enumerate(USERS, start=1):
     salt = f"riverbend{i:02d}saltval0"  # fixed -> deterministic output
     h = hash_password(DEMO_PASSWORD, salt)
-    rows.append(f" ({i}, {sql_str(uname)}, {sql_str(h)}, {sql_str(full)}, 'staff', now())")
+    rows.append(f" ({i}, {sql_str(uname)}, {sql_str(h)}, {sql_str(full)}, 'staff', NULL, now())")
+for j, (uname, full, pid) in enumerate(PATIENT_USERS, start=len(USERS) + 1):
+    salt = f"riverbend{j:02d}saltval0"
+    h = hash_password(DEMO_PASSWORD, salt)
+    rows.append(f" ({j}, {sql_str(uname)}, {sql_str(h)}, {sql_str(full)}, 'patient', NULL, now())")
 emit(",\n".join(rows) + ";")
-emit(f"SELECT setval('users_id_seq', {len(USERS)}, true);")
+emit(f"SELECT setval('users_id_seq', {len(USERS) + len(PATIENT_USERS)}, true);")
 emit()
 
 # ---------------------------------------------------------------------------
@@ -127,6 +142,13 @@ for _ in range(250):
 emit(",\n".join(prows) + ";")
 max_pid = pid - 1
 emit(f"SELECT setval('patients_id_seq', {max_pid}, true);")
+emit()
+
+# W4 / adr/0011: bind the patient-portal logins to their charts. Done here rather
+# than in the users INSERT because the FK requires the patients rows to exist.
+emit("-- W4/adr-0011: bind patient-portal logins to the chart they own.")
+for uname, _full, pid in PATIENT_USERS:
+    emit(f"UPDATE users SET patient_id = {pid} WHERE username = {sql_str(uname)};")
 emit()
 
 all_patient_ids = [1042,1043,1330,1588,1601] + gen_patient_ids

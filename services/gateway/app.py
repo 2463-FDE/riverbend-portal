@@ -4,11 +4,15 @@ gateway — backend-for-frontend / API gateway.
 The Next.js portal talks only to this service; it fans out to the internal
 FastAPI services and owns login/sessions.
 
-Inherited shortcomings (left as-is from the handoff):
-  * Records fan-out forwards the caller's session but never binds it to the
-    {patient_id} being requested — any logged-in user can read any chart (IDOR).
-  * Sessions never expire (see security.create_session / auth.yaml).
-  * One role for everyone; no per-action authorization beyond "is logged in".
+Inherited shortcomings:
+  * ~~Records fan-out never binds the session to the {patient_id} requested~~
+    FIXED in W4 (adr/0011). Patient-addressed routes now resolve an
+    AuthorizedScope BEFORE proxying, so an unauthorized id never reaches
+    records-service. Denials are 404, not 403, to avoid an enumeration oracle.
+  * Sessions never expire (D10, 164.312(a)(2)(iii)) — still open, W9.
+  * One role for everyone (D7, 164.502(b)) — still open, W9. Staff scope is
+    therefore COARSE: the gate narrows which PATIENT, not which staff role.
+    That distinction must not be oversold as least-privilege.
 """
 from typing import Optional
 
@@ -20,6 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 import authz
+import scope as scope_mod
 from config import settings
 from db import get_db
 from logging_config import configure
@@ -62,6 +67,31 @@ def require_session(authorization: Optional[str] = Header(default=None)) -> dict
     return sess
 
 
+def _same_as_lookup(patient_id: int) -> list:
+    """Identity cluster for a patient (W2 -> W4).
+
+    Maria Gonzalez is three charts. A patient logging in must see all three, or
+    the Week-4 authorization fix would turn the Week-2 fragmentation into an
+    access denial and hide her own allergy from her.
+
+    Best-effort: a failure here NARROWS the scope to self. Identity resolution
+    must never be able to widen access.
+    """
+    try:
+        payload = _get("ai", "/identity/clusters")
+        for cluster in payload.get("clusters", []):
+            ids = cluster.get("patient_ids") or []
+            if patient_id in ids:
+                return ids
+    except Exception:  # noqa: BLE001
+        pass
+    return [patient_id]
+
+
+def require_scope(session: dict) -> "scope_mod.AuthorizedScope":
+    return scope_mod.resolve_scope(session, same_as_lookup=_same_as_lookup)
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "service": settings.service_name}
@@ -84,12 +114,20 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
     user.last_login_at = func.now()
     db.commit()
-    token = create_session(user.username, user.role)
-    log.info("login ok user=%s", user.username)
+    # W4 / adr/0011: the session carries the patient binding when there is one.
+    # Read from the users row -- server-derived, never client-supplied.
+    token = create_session(user.username, user.role, getattr(user, "patient_id", None))
+    log.info("login ok user=%s principal=%s", user.username,
+             "patient" if getattr(user, "patient_id", None) else "staff")
     return {
         "token": token,
         "mfa": False,
-        "user": {"username": user.username, "full_name": user.full_name, "role": user.role},
+        "user": {
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role,
+            "patient_id": getattr(user, "patient_id", None),
+        },
     }
 
 
@@ -108,6 +146,9 @@ def me(session: dict = Depends(require_session)):
         # without guessing the policy client-side. The gateway stays the single
         # authority — this is a hint for the UI, not the check.
         "can_ingest": authz.can_ingest(session),
+        # W4: the portal renders the right landing view without guessing policy.
+        "patient_id": session.get("patient_id"),
+        "scope": require_scope(session).as_dict(),
     }
 
 
@@ -139,18 +180,42 @@ def proxy_patients(
 
 @app.get("/patients/{patient_id}")
 def proxy_patient(patient_id: int, session: dict = Depends(require_session)):
+    # D11 FIXED (W4, adr/0011). The scope is resolved BEFORE anything is
+    # proxied, so an unauthorized id never reaches records-service at all.
+    scope_mod.require_patient_access(require_scope(session), patient_id)
     return _get("records", f"/patients/{patient_id}")
 
 
 @app.get("/patients/{patient_id}/records")
 def proxy_records(patient_id: int, session: dict = Depends(require_session)):
-    # IDOR: a valid session is required, but it is never checked against
-    # {patient_id}. {patient_id} is the sequential primary key.
+    """D11 FIXED (W4, adr/0011).
+
+    This is the exact route the HAR walk used: a logged-in patient fetching
+    /api/patients/1042/records and then /api/patients/1043/records, both 200.
+    A valid session proved authentication; it never proved authorization,
+    because the session carried no patient identity to check against.
+
+    Denials are 404, not 403: a 403 on a real id and a 404 on a nonexistent one
+    confirms which ids exist, which is most of what the walk was after.
+    """
+    scope_mod.require_patient_access(require_scope(session), patient_id)
     return _get("records", f"/patients/{patient_id}/records")
 
 
 @app.get("/records/search")
 def proxy_search(q: str, session: dict = Depends(require_session)):
+    """Free-text search across records.
+
+    A patient principal must not be able to full-text search the whole record
+    corpus — that is a different route to the same exposure the HAR walk found.
+    Staff search is unchanged (coarse, D7/W9); D8's full-table scan is measured
+    and named this week, not fixed.
+    """
+    scope = require_scope(session)
+    if not scope.open_to_context:
+        raise HTTPException(
+            status_code=404, detail="not found"
+        )
     return _get("records", "/records/search", params={"q": q})
 
 
@@ -168,6 +233,8 @@ def proxy_slots(
 
 @app.get("/appointments")
 def proxy_list_appointments(patient_id: int, session: dict = Depends(require_session)):
+    # Same gate: appointments are patient-addressed, so the same walk works here.
+    scope_mod.require_patient_access(require_scope(session), patient_id)
     return _get("scheduling", "/appointments", params={"patient_id": patient_id})
 
 
@@ -186,6 +253,8 @@ def proxy_cancel(appointment_id: int, session: dict = Depends(require_session)):
 # --------------------------------------------------------------------------- #
 @app.get("/roi/requests")
 def proxy_roi_list(session: dict = Depends(require_session), patient_id: Optional[int] = None):
+    if patient_id is not None:
+        scope_mod.require_patient_access(require_scope(session), patient_id)
     return _get("roi", "/roi/requests", params={"patient_id": patient_id})
 
 
@@ -226,6 +295,36 @@ def proxy_ai_summary(payload: dict, session: dict = Depends(require_session)):
 # the knowledge-admin capability (authz.py): one bad document silently changes
 # every future grounded answer, so it is not part of the blanket `staff` role.
 # --------------------------------------------------------------------------- #
+@app.get("/ai/patient-view/{patient_id}")
+def proxy_patient_view(patient_id: int, session: dict = Depends(require_session)):
+    """Assembled patient view (W4).
+
+    The gateway resolves the AuthorizedScope and passes it as plain data. The
+    orchestrator assembles WITHIN that scope; it never decides who may see what.
+    The scope check runs here too, before anything is proxied, so an unauthorized
+    id never leaves this process.
+    """
+    scope = require_scope(session)
+    scope_mod.require_patient_access(scope, patient_id)
+    return _post("ai", "/patient-view", {
+        "patient_id": patient_id,
+        "scope": scope.as_dict(),
+        "thread_id": f"view-{session.get('username', 'anon')}-{patient_id}",
+    })
+
+
+@app.post("/ai/patient-view/{patient_id}/resume")
+def proxy_patient_view_resume(patient_id: int, payload: dict,
+                              session: dict = Depends(require_session)):
+    """Answer a run paused at the sensitivity gate (HITL)."""
+    scope_mod.require_patient_access(require_scope(session), patient_id)
+    return _post("ai", "/patient-view/resume", {
+        "patient_id": patient_id,
+        "thread_id": payload.get("thread_id", ""),
+        "approved": bool(payload.get("approved")),
+    })
+
+
 @app.post("/ai/agent/eligibility")
 def proxy_agent_eligibility(payload: dict, session: dict = Depends(require_session)):
     """Front-desk eligibility assistant (W3). Session-guarded like everything else."""
