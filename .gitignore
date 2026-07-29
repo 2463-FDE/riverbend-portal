@@ -7,3 +7,11 @@ dist/
 *.log.1
 *.log.2
 .venv/
+
+# W1 / debt D9 — real credentials must never be tracked. `.env` WAS tracked in
+# this repo (DB creds, payer key, Bedrock key). Untracking does NOT un-leak:
+# anything already committed is in the history and on every clone, and must be
+# ROTATED AT SOURCE. See docs/findings/w1-secrets-in-repo.md.
+.env
+.env.*
+!.env.example

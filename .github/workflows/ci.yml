@@ -31,6 +31,7 @@ jobs:
           - scheduling-service
           - interop-service
           - roi-service
+          - ai-orchestrator
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

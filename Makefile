@@ -25,9 +25,14 @@ seed-gen:      ## regenerate db/seed/seed.sql from the generator (deterministic)
 psql:          ## open a psql shell
 	docker compose exec postgres psql -U $${DB_USER:-riverbend_app} -d $${DB_NAME:-riverbend}
 
-test:          ## run unit tests (no infra needed)
+test:          ## run unit tests (no infra needed, no AWS, zero spend)
 	pip install -r requirements-dev.txt >/dev/null
 	pytest -m "not integration" -q
+
+test-live:     ## run the key-gated Bedrock smoke tests -- THIS SPENDS MONEY
+	pip install -r requirements-dev.txt >/dev/null
+	pip install -r services/ai-orchestrator/requirements.txt >/dev/null
+	pytest --live -m live -q -s
 
 frontend-dev:  ## run the Next.js dev server
 	cd frontend && npm install && npm run dev

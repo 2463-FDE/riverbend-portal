@@ -1,0 +1,154 @@
+"""Key-gated live Bedrock smoke tests. SKIPPED BY DEFAULT — these spend money.
+
+Written up front, not on key-day. The point is that when a credential arrives the
+verification is one command rather than a scramble, and that nobody writes
+cost-unbounded tests under time pressure with a live key in the environment.
+
+    make test-live                      # run them (installs the service deps)
+    pytest --live -m live               # the same thing, by hand
+    pytest                              # the default: live tests are skipped
+
+The gate is the ``--live`` FLAG, not a marker expression, because a ``-m`` on the
+command line overrides ``addopts`` — so gating in addopts would mean
+``pytest -m "not integration"`` (what the Makefile passes) silently re-enabled the
+spending tests. A collection hook cannot be overridden that way. See
+``tests/conftest.py``.
+
+Ordering matters and is enforced, not hoped for:
+
+    L0  retention posture     — spends NOTHING. Gates everything below.
+    L1  model resolves        — one tiny call
+    L2  summary under budget  — one real summary, cost asserted
+
+L0 exists because a model whose ``allowed_modes`` excludes ``none`` would share
+prompts and completions with the model provider for up to 30 days. Discovering
+that *after* sending text is discovering it too late.
+
+Every spending test asserts a hard per-test cost ceiling, so an accidental loop
+cannot run up a bill.
+"""
+import os
+
+import pytest
+
+from conftest import load_module
+
+pytestmark = pytest.mark.live
+
+# Per-test USD ceilings. Deliberately tiny: these are smoke tests, not evals.
+CEILING_PER_TEST_USD = 0.01
+
+_HAS_KEY = bool(
+    os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+    or os.getenv("AWS_ACCESS_KEY_ID")
+    or os.getenv("AWS_PROFILE")
+)
+
+skip_no_key = pytest.mark.skipif(
+    not _HAS_KEY,
+    reason="no Bedrock credential in the environment (set AWS_BEARER_TOKEN_BEDROCK)",
+)
+
+
+def _require_langchain_aws():
+    """L1/L2 need the service's own deps; L0 only needs boto3.
+
+    Kept inside the tests rather than at module scope so L0 — the retention
+    preflight that spends nothing and gates the rest — always collects and runs.
+    Install with: pip install -r services/ai-orchestrator/requirements.txt
+    """
+    pytest.importorskip(
+        "langchain_aws",
+        reason="run `pip install -r services/ai-orchestrator/requirements.txt`",
+    )
+
+retention = load_module("services/ai-orchestrator/retention.py", "live_retention")
+mc = load_module("services/ai-orchestrator/model_client.py", "live_model_client")
+settings = mc.settings
+
+SOURCE = (
+    "Please arrive fifteen minutes before your appointment. Bring your insurance "
+    "card and a photo ID. Do not eat or drink anything except water for eight "
+    "hours before your blood draw."
+)
+
+
+# --------------------------------------------------------------------------- #
+# L0 — spends nothing, gates everything
+# --------------------------------------------------------------------------- #
+@skip_no_key
+def test_L0_live_model_allows_zero_retention(monkeypatch):
+    """RVB-X-09. If this fails, do not send anything to this model."""
+    monkeypatch.setattr(settings, "use_stub", False)
+    status = retention.check(settings.summary_model_id)
+    assert status.ok, (
+        f"model {settings.summary_model_id!r} failed the zero-retention "
+        f"preflight: {status.reason}. Prompts and completions could be retained "
+        f"or shared with the model provider. Pick a different model — see "
+        f"adr/0004 §1a."
+    )
+    # Record what we saw so the PR / demo notes can quote it.
+    print(f"\n[L0] retention: {status.as_dict()}")
+
+
+# --------------------------------------------------------------------------- #
+# L1 — the model id actually resolves
+# --------------------------------------------------------------------------- #
+@skip_no_key
+def test_L1_live_model_resolves(monkeypatch):
+    """Bare model ids fail with ValidationException at CALL time.
+
+    Which means in the demo, not in CI. This is the test that stops that.
+    """
+    _require_langchain_aws()
+    monkeypatch.setattr(settings, "use_stub", False)
+    monkeypatch.setattr(settings, "max_output_tokens", 32)
+
+    client = mc.ModelClient(settings.summary_model_id)
+    result = client.invoke(
+        "Reply with a single word.",
+        'Say the word "ready". Respond ONLY with {"text": "ready"}.',
+        structured_key="text",
+    )
+    assert result.text, "no text returned"
+    assert result.stubbed is False
+    assert result.est_cost_usd <= CEILING_PER_TEST_USD, (
+        f"cost ${result.est_cost_usd} exceeded the per-test ceiling"
+    )
+    print(f"\n[L1] model={result.model_id} tokens={result.input_tokens}/"
+          f"{result.output_tokens} cost=${result.est_cost_usd} "
+          f"latency={result.latency_ms}ms attempts={result.attempts}")
+
+
+# --------------------------------------------------------------------------- #
+# L2 — one real summary, grounded, under budget
+# --------------------------------------------------------------------------- #
+@skip_no_key
+def test_L2_live_summary_is_grounded_and_under_budget(monkeypatch):
+    _require_langchain_aws()
+    monkeypatch.setattr(settings, "use_stub", False)
+    guardrails = load_module("services/ai-orchestrator/guardrails.py", "live_guardrails")
+
+    system = (
+        "You rewrite clinic intake instructions into a short, plain-language "
+        "summary a patient can understand. Use ONLY the information provided. "
+        "Do not add medications, dosages, or diagnoses. Respond ONLY with "
+        '{"summary": "..."}.'
+    )
+    client = mc.ModelClient(settings.summary_model_id)
+    result = client.invoke(
+        system, f"Intake instructions:\n{SOURCE}\n\nReturn JSON only.",
+        structured_key="summary",
+    )
+
+    assert result.est_cost_usd <= CEILING_PER_TEST_USD, (
+        f"cost ${result.est_cost_usd} exceeded the per-test ceiling"
+    )
+    verdict = guardrails.check(result.text, SOURCE, settings.grounding_threshold)
+    print(f"\n[L2] grounded={verdict.grounded} score={verdict.score} "
+          f"cost=${result.est_cost_usd}\n     summary: {result.text[:200]}")
+    assert verdict.grounded, (
+        f"live summary failed the Tier-0 grounding check "
+        f"(score {verdict.score}, reasons {verdict.reasons}). "
+        f"That is a real signal, not a flaky test — inspect the output above."
+    )
