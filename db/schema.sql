@@ -24,12 +24,14 @@ CREATE TABLE IF NOT EXISTS users (
     -- staff. Server-derived at login and carried in the session -- a request can
     -- never assert its own patient identity. Without this column, "let patients
     -- see their OWN records" was not expressible, which is the real shape of D11.
-    patient_id    INTEGER REFERENCES patients(id)
+    --
+    -- The FOREIGN KEY is added further down, after `patients` exists. Declaring
+    -- it inline here referenced a table defined 20 lines LATER in this file, so
+    -- a fresh `docker compose up` failed at init with
+    -- `relation "patients" does not exist` and the whole stack never started.
+    -- Every test mocks the database, so 248 green tests never touched this file.
+    patient_id    INTEGER
 );
--- Two logins for one patient row would make "who viewed this patient?" (W10)
--- unanswerable, because a read could not be attributed to a person.
-CREATE UNIQUE INDEX IF NOT EXISTS users_patient_id_uniq
-    ON users (patient_id) WHERE patient_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Patients
@@ -50,6 +52,22 @@ CREATE TABLE IF NOT EXISTS patients (
 );
 -- NOTE: no unique match key on (name, dob, ssn) — self-service intake forks
 -- one person into several rows. See intake.yaml match_key: none.
+
+-- W4 / adr/0011 — the users -> patients binding, added here because `users` is
+-- declared above `patients` in this file and an inline REFERENCES could not
+-- resolve forward.
+--
+-- Two logins for one patient row would make "who viewed this patient?" (W10)
+-- unanswerable, because a read could not be attributed to a person — hence the
+-- unique index rather than a plain FK.
+ALTER TABLE users
+    DROP CONSTRAINT IF EXISTS users_patient_id_fkey;
+ALTER TABLE users
+    ADD CONSTRAINT users_patient_id_fkey
+    FOREIGN KEY (patient_id) REFERENCES patients(id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_patient_id_uniq
+    ON users (patient_id) WHERE patient_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS insurance_coverages (
     id            SERIAL PRIMARY KEY,

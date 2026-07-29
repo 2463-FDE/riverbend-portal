@@ -45,7 +45,7 @@ from config import settings
 from embeddings import content_terms
 from index_port import KIND_RECORD
 
-GOLDSET_PATH = os.path.join(corpus.SEED_DIR, "goldset.json")
+GOLDSET_PATH = os.path.join(corpus.SEED_DIR, "goldset.json")  # resolved via corpus.SEED_DIR
 
 
 @dataclass
@@ -98,7 +98,7 @@ class EvalRun:
 
 
 def load_goldset(path: Optional[str] = None) -> list[GoldCase]:
-    path = path or GOLDSET_PATH
+    path = path or corpus.seed_path("goldset.json")
     with open(path, encoding="utf-8") as fh:
         raw = json.load(fh)
     cases: list[GoldCase] = []

@@ -85,12 +85,17 @@ services:
       USE_STUB_BEDROCK: "${USE_STUB_BEDROCK:-true}"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
       BEDROCK_MODEL_ID: "${BEDROCK_MODEL_ID:-us.anthropic.claude-3-5-haiku-20241022-v1:0}"
+      RIVERBEND_SEED_DIR: /seed
       CHROMA_MODE: "${CHROMA_MODE:-http}"
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
       RAG_EMBED_BACKEND: "${RAG_EMBED_BACKEND:-offline}"
     ports:
       - "8077:8077"
+    volumes:
+      # The handover dump the W2 eval and the W4 patient view read. Read-only:
+      # this is source data, and the service has no business writing to it.
+      - ./db/seed:/seed:ro
     depends_on:
       chroma:
         condition: service_started

@@ -21,3 +21,6 @@ dist/
 test-results/
 playwright-report/
 .playwright/
+
+# Machine-specific port remapping for local dev; never committed.
+docker-compose.override.yml

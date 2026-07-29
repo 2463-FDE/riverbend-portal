@@ -32,7 +32,32 @@ from index_port import KIND_KNOWLEDGE, KIND_RECORD, IndexChunk
 from mpi import PatientRow
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-SEED_DIR = os.path.join(REPO_ROOT, "db", "seed")
+
+# Where the handover dump lives.
+#
+# The relative path works when the service is run from a checkout, and ONLY
+# then. In the container this module sits at /app, so "../.." resolved to
+# /db/seed and every corpus read raised FileNotFoundError — taking out identity
+# clusters, the knowledge seed, the eval harness and the patient view. The
+# gateway swallowed it as a best-effort lookup, so the visible symptom was
+# Maria's scope silently narrowing to one chart: the Week-4 authorization fix
+# turning the Week-2 fragmentation into an access denial, live, in exactly the
+# way three documents warned it must not.
+#
+# Nothing caught it because every test runs from the repo root. Now explicit,
+# and compose mounts the directory (see docker-compose.yml).
+SEED_DIR = os.environ.get("RIVERBEND_SEED_DIR") or os.path.join(REPO_ROOT, "db", "seed")
+
+
+def seed_path(name: str) -> str:
+    """Resolve a seed file, failing with something a human can act on."""
+    path = os.path.join(SEED_DIR, name)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"seed file {name!r} not found at {path}. SEED_DIR={SEED_DIR}. "
+            f"In a container, set RIVERBEND_SEED_DIR and mount db/seed."
+        )
+    return path
 
 
 class CorpusCapExceeded(RuntimeError):
@@ -51,7 +76,7 @@ class Encounter:
 
 
 def load_patients(path: Optional[str] = None) -> list[PatientRow]:
-    path = path or os.path.join(SEED_DIR, "patients.csv")
+    path = path or seed_path("patients.csv")
     rows: list[PatientRow] = []
     with open(path, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
@@ -70,7 +95,7 @@ def load_patients(path: Optional[str] = None) -> list[PatientRow]:
 
 
 def load_encounters(path: Optional[str] = None) -> list[Encounter]:
-    path = path or os.path.join(SEED_DIR, "encounters.csv")
+    path = path or seed_path("encounters.csv")
     out: list[Encounter] = []
     with open(path, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
