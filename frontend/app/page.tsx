@@ -16,12 +16,16 @@ import {
   IconHeart,
 } from "./components/icons";
 import { apiFetch, getUser } from "./lib/session";
+import { usePrincipal } from "./lib/principal";
 import type { Appointment, EncounterBlock, RecordItem } from "./lib/types";
 import { fmtDateTime, firstName } from "./lib/format";
 
-// The dashboard pulls a default patient's data so the portal has something to
-// show on landing (a single-patient demo account).
-const DEFAULT_PATIENT_ID = "1042";
+// Staff have no chart of their own, so the dashboard needs *a* patient to show
+// until the name-search picker lands in #20. This is a browsing default for
+// staff only -- a patient principal always reads their own binding. It is NOT
+// the old DEFAULT_PATIENT_ID, which was applied to everyone and left
+// james.obrien staring at an empty dashboard after #16.
+const STAFF_BROWSE_PATIENT_ID = 1042;
 
 function isResult(r: RecordItem): boolean {
   return Boolean(r.test || r.value !== undefined || r.reference_range);
@@ -31,25 +35,56 @@ export default function DashboardPage() {
   const [appts, setAppts] = useState<Appointment[] | null>(null);
   const [results, setResults] = useState<RecordItem[] | null>(null);
   const [name, setName] = useState("there");
+  const { status, principal } = usePrincipal();
+
+  // W1 (2/2) — the defect this fixes, stated plainly because we shipped it.
+  //
+  // This used to read a hard-coded DEFAULT_PATIENT_ID = "1042". After the
+  // authorization gate landed in #16, the seeded account `james.obrien` (bound
+  // to chart 1043) fetched 1042, received a 404, and landed on an empty
+  // dashboard. `maria.gonzalez` worked only because her chart happened to be
+  // the hard-coded one.
+  //
+  // Staff keep a browsable default until the picker arrives in #20; a patient
+  // reads their own binding, which is the only value that can be correct for
+  // them. A patient whose session is malformed has `patientId: null` and gets no
+  // fetch at all rather than someone else's chart.
+  const patientId =
+    principal?.kind === "patient"
+      ? principal.patientId
+      : principal?.kind === "staff"
+        ? STAFF_BROWSE_PATIENT_ID
+        : null;
 
   useEffect(() => {
     const u = getUser();
     if (u?.full_name) setName(firstName(u.full_name));
+  }, []);
 
-    apiFetch(`/api/appointments?patient_id=${DEFAULT_PATIENT_ID}`)
-      .then((r) => r.json())
+  useEffect(() => {
+    if (status !== "ready") return;
+    if (patientId === null) {
+      // Nothing safe to load. Empty is the correct render — silently showing
+      // another patient's chart is what we are fixing.
+      setAppts([]);
+      setResults([]);
+      return;
+    }
+
+    apiFetch(`/api/appointments?patient_id=${patientId}`)
+      .then((r) => (r.ok ? r.json() : []))
       .then((d) => setAppts(Array.isArray(d) ? d : (d.items ?? [])))
       .catch(() => setAppts([]));
 
-    apiFetch(`/api/records?patient_id=${DEFAULT_PATIENT_ID}`)
-      .then((r) => r.json())
+    apiFetch(`/api/records?patient_id=${patientId}`)
+      .then((r) => (r.ok ? r.json() : { encounters: [] }))
       .then((d) => {
         const encounters: EncounterBlock[] = d.encounters ?? [];
         const recs = encounters.flatMap((e) => e.records ?? []).filter(isResult);
         setResults(recs.slice(0, 5));
       })
       .catch(() => setResults([]));
-  }, []);
+  }, [status, patientId]);
 
   const upcoming = (appts ?? [])
     .filter((a) => !["cancelled", "canceled", "completed"].includes(a.status?.toLowerCase()))

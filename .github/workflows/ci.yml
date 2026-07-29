@@ -17,6 +17,9 @@ jobs:
         with:
           node-version: "22"
       - run: npm install
+      # Component tier only. The Playwright journeys need the whole stack
+      # (make up) and run on their own command -- see adr/0013.
+      - run: npm test
       - run: npm run build
 
   services:

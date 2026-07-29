@@ -950,6 +950,14 @@ textarea:focus-visible,
   border-color: var(--rb-primary-tint-2);
   color: var(--rb-primary-darker);
 }
+/* W1 (2/2). "Held for review" is not an error and not a success -- rendering it
+   as either misleads. The --rb-warn tokens already existed; only the alert
+   variant was missing. */
+.rb-alert--warn {
+  background: var(--rb-warn-bg);
+  border-color: #e9d5a8;
+  color: var(--rb-warn);
+}
 .rb-muted {
   color: var(--rb-text-muted);
 }
