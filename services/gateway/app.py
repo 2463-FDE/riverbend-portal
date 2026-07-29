@@ -18,6 +18,7 @@ from typing import Optional
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -76,10 +77,17 @@ def _same_as_lookup(patient_id: int) -> list:
 
     Best-effort: a failure here NARROWS the scope to self. Identity resolution
     must never be able to widen access.
+
+    Uses ``_get_json`` rather than ``_get``: since RVB-U-09, ``_get`` returns a
+    ``JSONResponse`` for the client, which has no ``.get()``. Calling it here
+    would have fallen into the ``except`` on every request and silently narrowed
+    every patient to their own chart — quietly undoing the Week-2 fix so that
+    Maria could no longer see the fragment carrying her penicillin allergy.
+    Caught by ``test_same_as_lookup_still_resolves_fragments``.
     """
     try:
-        payload = _get("ai", "/identity/clusters")
-        for cluster in payload.get("clusters", []):
+        payload = _get_json("ai", "/identity/clusters")
+        for cluster in (payload or {}).get("clusters", []):
             ids = cluster.get("patient_ids") or []
             if patient_id in ids:
                 return ids
@@ -283,6 +291,18 @@ def proxy_hl7(payload: dict, session: dict = Depends(require_session)):
 # unauthenticated surface. The orchestrator's contract accepts instruction text
 # only, so no patient record crosses this boundary — see adr/0005.
 # --------------------------------------------------------------------------- #
+@app.get("/ai/health")
+def proxy_ai_health(session: dict = Depends(require_session)):
+    """Health + retention posture for the AI service.
+
+    The summary panel reads `retention.ok` on mount so it can disable submit
+    BEFORE a request is made (RVB-W1-U3). Without this, the only way to discover
+    the feature is disabled is to try it and read a refusal — which is a worse
+    experience and spends a round trip to learn something static.
+    """
+    return _get("ai", "/healthz")
+
+
 @app.post("/ai/summary")
 def proxy_ai_summary(payload: dict, session: dict = Depends(require_session)):
     return _post("ai", "/summary", payload)
@@ -380,19 +400,63 @@ def _clean(params: Optional[dict]) -> dict:
     return {k: v for k, v in (params or {}).items() if v is not None}
 
 
+def _relay(r: httpx.Response) -> JSONResponse:
+    """Relay a downstream response, PRESERVING its status code.
+
+    W1-UI / RVB-U-09. This previously returned ``r.json()`` and discarded
+    ``r.status_code``, so a downstream 422 or 503 reached the browser as **HTTP
+    200 with an error body** — indistinguishable from success to any caller.
+
+    Worth being precise about what this did and did not affect, because the
+    distinction is load-bearing: exceptions the gateway RAISES itself
+    (``require_patient_access`` → 404, ``require_session`` → 401,
+    ``authz.require_ingest`` → 403) are raised before the proxy call and always
+    carried their status. Only DOWNSTREAM service errors were flattened. So the
+    IDOR 404 that Week 4 rests on was never affected — but every service-level
+    failure looked like success, which is why the UI could not render an error
+    state honestly.
+    """
+    try:
+        data = r.json()
+    except ValueError:
+        # A downstream that returned non-JSON is itself a fault worth surfacing,
+        # not something to paper over with an empty body.
+        data = {"detail": (r.text or "")[:500] or "upstream returned no body"}
+    return JSONResponse(content=data, status_code=r.status_code)
+
+
+def _get_json(service: str, path: str, params: Optional[dict] = None) -> Optional[dict]:
+    """Fetch a downstream body for the gateway's OWN use, not for relaying.
+
+    Distinct from ``_get`` on purpose. ``_get`` builds a client-facing response;
+    this returns the parsed body so gateway logic can read it. Conflating the two
+    is how ``_same_as_lookup`` nearly started narrowing every patient to a single
+    chart.
+    """
+    try:
+        r = httpx.get(f"{SERVICES[service]}{path}", params=_clean(params), timeout=30)
+        return r.json() if r.is_success else None
+    except Exception as e:  # noqa: BLE001
+        log.warning("internal GET %s%s failed: %s", service, path, type(e).__name__)
+        return None
+
+
 def _post(service: str, path: str, payload: dict):
     try:
         r = httpx.post(f"{SERVICES[service]}{path}", json=payload, timeout=30)
-        return r.json()
+        return _relay(r)
     except Exception as e:
-        log.error("proxy POST %s%s failed: %s", service, path, e)
-        return {"error": str(e)}
+        log.error("proxy POST %s%s failed: %s", service, path, type(e).__name__)
+        # 502, not 200-with-an-error-key: the caller asked us to reach something
+        # and we could not. Returning 200 here is how a broken dependency looks
+        # like a working feature.
+        return JSONResponse({"error": "upstream unavailable"}, status_code=502)
 
 
 def _get(service: str, path: str, params: Optional[dict] = None):
     try:
         r = httpx.get(f"{SERVICES[service]}{path}", params=_clean(params), timeout=30)
-        return r.json()
+        return _relay(r)
     except Exception as e:
-        log.error("proxy GET %s%s failed: %s", service, path, e)
-        return {"error": str(e)}
+        log.error("proxy GET %s%s failed: %s", service, path, type(e).__name__)
+        return JSONResponse({"error": "upstream unavailable"}, status_code=502)

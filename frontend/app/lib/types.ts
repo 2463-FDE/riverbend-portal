@@ -4,6 +4,49 @@ export interface PortalUser {
   username: string;
   full_name: string;
   role: string;
+  // W4 / adr/0011. Present for patient-portal accounts, null for staff.
+  // Server-derived at login -- the client never asserts its own patient identity.
+  patient_id?: number | null;
+}
+
+// GET /me. `scope` and `can_ingest` are rendering hints; the gateway re-derives
+// both server-side on every request and is the only authority.
+export interface MeResponse {
+  username: string;
+  role: string;
+  can_ingest: boolean;
+  patient_id: number | string | null;
+  scope: {
+    principal: "patient" | "staff";
+    username: string;
+    patient_ids: number[];
+    open_to_context: boolean;
+  };
+}
+
+// POST /ai/summary
+export interface SummaryResponse {
+  request_id: string;
+  summary: string;
+  grounded: boolean;
+  needs_review: boolean;
+  model: string;
+  stubbed: boolean;
+  usage: {
+    refused?: string;
+    input_tokens?: number;
+    output_tokens?: number;
+    est_cost_usd?: number;
+    grounding_score?: number;
+  };
+}
+
+// GET /ai/health -- read on mount so the panel can disable submit BEFORE a
+// request is made, rather than spending a round trip to learn something static.
+export interface AiHealth {
+  status: string;
+  stub: boolean;
+  retention: { ok: boolean; reason: string; checked: boolean };
 }
 
 export interface LoginResponse {

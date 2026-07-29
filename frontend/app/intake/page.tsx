@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import Card from "../components/Card";
+import SummaryPanel from "../components/SummaryPanel";
+import { IconIntake } from "../components/icons";
 import { apiFetch } from "../lib/session";
 
 interface Demographics {
@@ -33,6 +35,15 @@ const STEPS = ["Demographics", "Insurance", "Consents", "Review & Submit"];
 
 export default function IntakePage() {
   const [step, setStep] = useState(0);
+  // W1 (2/2). The summariser takes the clinic's VISIT INSTRUCTIONS -- not the
+  // patient's form data. Kept as its own field so a patient record can never
+  // reach the endpoint by accident; the contract has no field for one anyway
+  // (adr/0005), and this keeps the UI honest about that.
+  const [instructions, setInstructions] = useState(
+    "Please arrive fifteen minutes before your appointment. Bring your "
+    + "insurance card and a photo ID. Do not eat or drink anything except "
+    + "water for eight hours before your blood draw."
+  );
   const [demo, setDemo] = useState<Demographics>({
     first_name: "",
     last_name: "",
@@ -295,6 +306,27 @@ export default function IntakePage() {
           )}
         </div>
       </Card>
+
+      {/* W1 (2/2) -- the AI feature, on screen for the first time. */}
+      <Card title="Visit instructions" icon={<IconIntake />}>
+        <div className="rb-field" style={{ marginBottom: 0 }}>
+          <label className="rb-field__label" htmlFor="visit-instructions">
+            Instructions given to the patient for this visit
+          </label>
+          <textarea
+            id="visit-instructions"
+            className="rb-input"
+            rows={4}
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+          />
+          <span className="rb-field__hint">
+            Clinic instructions only. Do not paste a patient&apos;s record here.
+          </span>
+        </div>
+      </Card>
+
+      <SummaryPanel instructions={instructions} />
     </div>
   );
 }

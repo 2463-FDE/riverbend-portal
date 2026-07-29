@@ -37,5 +37,11 @@ test-live:     ## run the key-gated Bedrock smoke tests -- THIS SPENDS MONEY
 frontend-dev:  ## run the Next.js dev server
 	cd frontend && npm install && npm run dev
 
+test-ui:       ## run the frontend component tests (fast, no stack needed)
+	cd frontend && npm install --silent && npm test
+
+test-e2e:      ## run the browser journeys -- REQUIRES `make up` first
+	cd frontend && npm install --silent && npx playwright install --with-deps chromium && npm run test:e2e
+
 config:        ## validate the compose file
 	docker compose config -q && echo "compose OK"

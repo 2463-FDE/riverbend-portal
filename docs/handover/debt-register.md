@@ -215,3 +215,43 @@ Similarly, the HITL `cross_patient` flag was not declared in the graph's state
 schema, so LangGraph dropped it and the sensitivity gate never fired while every
 other test still passed. A control that fails open without any error is the worst
 kind; both are now pinned by tests.
+
+---
+
+## UI phase — W1 (2/2)
+
+### New finding — the portal runs a Next.js version with a known CVE
+`frontend/package.json` pins `next@15.1.3`; npm warns on every install that it
+has a security vulnerability (CVE-2025-66478). Nobody had read that output.
+
+**Named, not fixed** — upgrading a web framework does not belong in a PR about a
+summary panel, and this repo had no frontend test coverage to catch a regression
+until today. The durable finding is not the CVE: it is that **no dependency
+scanning exists**, for either the JS or the Python side, in the same way no
+secret scanning existed (D9).
+**Full finding:** `docs/findings/w1ui-vulnerable-nextjs.md`
+
+### Regression we introduced in #16, now fixed
+`app/page.tsx` hard-coded `DEFAULT_PATIENT_ID = "1042"`. After the authorization
+gate landed, the seeded account `james.obrien` (chart 1043) fetched 1042, got a
+404, and landed on an **empty dashboard**. `maria.gonzalez` worked only because
+her chart happened to be the hard-coded one — the worst kind of passing, because
+it looks like the feature works. Fixed in the first UI PR rather than the last.
+
+### RVB-U-09 — the gateway now preserves upstream HTTP status
+`_post`/`_get` returned `r.json()` and discarded `r.status_code`, so a downstream
+422 or 503 reached the browser as **HTTP 200 with an error body**. Every UI error
+state depended on being able to tell failure from success.
+
+Scope, verified: gateway-**raised** exceptions (404 authorization, 401 session,
+403 capability) are raised before the proxy call and always carried their status.
+Only downstream service errors flattened — so the IDOR 404 was never affected.
+
+### A regression this change nearly introduced
+`_same_as_lookup` read `_get(...)` and called `.get("clusters")` on it. Once
+`_get` returned a `JSONResponse`, that raised inside its own `try/except` and
+**silently narrowed every patient to their own chart** — quietly undoing the
+Week-2 fix so Maria could no longer see the fragment carrying her penicillin
+allergy. Split into `_get_json` for gateway-internal reads, and pinned by
+`test_same_as_lookup_still_resolves_fragments`, which was verified to fail when
+the bug is reintroduced.
