@@ -8,8 +8,19 @@ pydantic==2.10.6
 boto3==1.43.58
 
 # Bedrock access goes through the Converse API via langchain-aws. LangChain v1
-# line — see adr/0004. langgraph is not a dependency of W1 by design: a single
-# request/response summarization has no state, no branching and no tools, so a
-# graph runtime would be cost without benefit (adr/0004 §2, debate D2).
+# line — see adr/0004.
 langchain-aws==1.6.4
 langchain-core==1.5.2
+
+# LangGraph v1 arrives in W2, on the week it is first NEEDED: retrieval has two
+# real branch points (relevance gate, grounding gate) and a refuse path that must
+# be first-class. `>=1.0,<2.0` IS the v1 API contract — v1 is explicitly a
+# stability release, so the minor line moves without breaking the surface we use.
+# See adr/0004 §2 and the escalating-abstraction argument in the design debate.
+langgraph>=1.0,<2.0
+
+# Vector store. We talk to chromadb directly rather than through
+# langchain-chroma: the KnowledgeIndex port already provides that abstraction,
+# and a second wrapper would only add a version-skew surface. See adr/0006 §1
+# (amendment).
+chromadb==1.5.9

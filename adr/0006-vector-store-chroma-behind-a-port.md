@@ -20,6 +20,23 @@ stateful service is not free.
 
 ### 1. Chroma is the adapter; `KnowledgeIndex` is the interface
 
+> **Amendment, 2026-07-29 (implementation).** The original decision named
+> `langchain_chroma.Chroma` as the adapter. **We use the `chromadb` client
+> directly instead.** Reasons, recorded rather than quietly changed:
+>
+> 1. The `KnowledgeIndex` port already provides every abstraction
+>    `langchain-chroma` would have — that was the whole point of §1 — so the
+>    integration package would have been a second, redundant wrapper.
+> 2. It removes a version-skew surface. `langchain-chroma` 1.1.0 (2025-12-12)
+>    against `chromadb` 1.5.9 (2026-05-05) is a compatibility pairing we would
+>    have to track, and this ADR already lists version skew as an accepted cost.
+> 3. Metadata filtering is the load-bearing feature here — the patient scope on
+>    the PHI collection — and the native `where={"patient_id": {"$in": [...]}}`
+>    is more direct than routing it through a wrapper's `filter=` argument.
+>
+> The debate's own standard applies: do not add an abstraction that has not
+> earned its place. This one had not.
+
 Application code talks to a narrow local port:
 
 ```python

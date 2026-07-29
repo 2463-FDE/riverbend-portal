@@ -104,3 +104,50 @@ the host. Removing PHI from logs is an open remediation item.
 `.github/workflows/ci.yml`: frontend build, per-service import smoke, unit tests
 (`pytest -m "not integration"`), then `docker compose build`. There is no
 secret-scan, dependency-vuln-scan, or image-scan step — another known gap.
+
+## Chroma (knowledge index) — backup, restore, rebuild
+
+The Chroma volume holds **derived data**. Every chunk in it is reproducible from
+`db/seed/*.csv` and the clinic knowledge documents in
+`services/ai-orchestrator/corpus.py`. That is the property that makes the
+following procedures cheap, and it is a gate on the W2 PR (adr/0006): a store we
+cannot rebuild is a store we cannot lose.
+
+### Rebuild from source (the normal recovery path)
+
+```bash
+curl -sX POST localhost:8070/ai/knowledge/seed \
+     -H "Authorization: Bearer $TOKEN"     # requires the knowledge_admin capability
+```
+
+Takes seconds on the sampled corpus. Prefer this to restoring a backup — it
+cannot restore stale or corrupted vectors.
+
+### Back up the volume
+
+```bash
+docker compose stop chroma
+docker run --rm -v riverbend-portal_chroma-data:/data -v "$PWD":/backup \
+  alpine tar czf /backup/chroma-$(date +%F).tar.gz -C /data .
+docker compose start chroma
+```
+
+### Restore
+
+```bash
+docker compose stop chroma
+docker run --rm -v riverbend-portal_chroma-data:/data -v "$PWD":/backup \
+  alpine sh -c "rm -rf /data/* && tar xzf /backup/chroma-YYYY-MM-DD.tar.gz -C /data"
+docker compose start chroma
+```
+
+### ⚠ The `riverbend_records` collection holds PHI
+
+It is a PHI store and is governed as one. A Chroma backup tarball is therefore a
+PHI artifact: it needs the same handling, storage location, and retention
+decision as a database dump. Do **not** leave one in the repo directory, which is
+where the command above writes it — move it to wherever database backups already
+go.
+
+Queries against that collection require an authorized patient scope; the adapter
+raises rather than serving an unscoped similarity search (`index_port.ScopeRequired`).

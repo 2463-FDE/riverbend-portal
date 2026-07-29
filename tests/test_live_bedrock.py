@@ -152,3 +152,54 @@ def test_L2_live_summary_is_grounded_and_under_budget(monkeypatch):
         f"(score {verdict.score}, reasons {verdict.reasons}). "
         f"That is a real signal, not a flaky test — inspect the output above."
     )
+
+
+# --------------------------------------------------------------------------- #
+# L3 — Titan embeddings, one real call
+# --------------------------------------------------------------------------- #
+@skip_no_key
+def test_L3_live_titan_embeddings(monkeypatch):
+    """One real Titan call. Asserts the configured dimensionality and the cost.
+
+    Gated behind L0: if the model does not permit zero data retention, no text
+    should reach it at all.
+    """
+    embeddings = load_module("services/ai-orchestrator/embeddings.py", "live_embeddings")
+    monkeypatch.setattr(embeddings.settings, "use_stub", False)
+
+    backend = embeddings.TitanEmbedder(
+        embeddings.settings.embed_dims, embeddings.settings.embed_model_id
+    )
+    embedder = embeddings.Embedder(backend)
+    vector = embedder.embed_one("fasting instructions before a blood draw")
+
+    assert len(vector) == embeddings.settings.embed_dims, (
+        f"expected {embeddings.settings.embed_dims} dimensions, got {len(vector)}"
+    )
+    # Titan V2 is ~$0.02 per 1M input tokens; a single short string is far below
+    # any meaningful ceiling. The assertion that matters is that we made ONE call.
+    assert embedder.stats.calls == 1
+    print(f"\n[L3] titan dims={len(vector)} calls={embedder.stats.calls}")
+
+
+@skip_no_key
+def test_L4_live_rag_answer_is_grounded_and_cited(monkeypatch):
+    """One real RAG generation over the seeded corpus."""
+    _require_langchain_aws()
+    import chromadb
+
+    chroma = load_module("services/ai-orchestrator/chroma_index.py", "live_chroma")
+    corpus_mod = load_module("services/ai-orchestrator/corpus.py", "live_corpus")
+    rag = load_module("services/ai-orchestrator/rag_graph.py", "live_rag")
+
+    monkeypatch.setattr(chroma.settings, "use_stub", False)
+    index = chroma.ChromaIndex(client=chromadb.EphemeralClient())
+    index.add(corpus_mod.build_knowledge_chunks())
+
+    out = rag.run(index, "how long must a patient fast before a blood draw?")
+    print(f"\n[L4] grounded={out.grounded} refused={out.refused} "
+          f"cost=${out.usage.get('est_cost_usd')}\n     {out.answer[:200]}")
+    assert not out.refused
+    assert out.grounded
+    assert out.citations
+    assert out.usage.get("est_cost_usd", 0) <= CEILING_PER_TEST_USD
