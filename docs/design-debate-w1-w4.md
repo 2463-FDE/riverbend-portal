@@ -503,3 +503,389 @@ The original still applies, with one addition forced by how we got here:
 
 An endpoint that returns the right JSON is not a delivered feature. We answered
 that question wrongly four times, and the corrections are in the PR bodies.
+
+---
+
+# Part III — ingestion, and designing a UI for an agent
+
+**Date:** 2026-07-29, after `#17` merged and the stack was started for the first time
+**Trigger:** two client instructions. Employees must be able to **upload
+documents**, not paste text. And the UI should be shaped around **how the agents
+actually operate**, rather than being a CRUD skin that happens to call them.
+
+The first looked like a file-input control. It is not. The second looked like
+polish. It is not either.
+
+---
+
+## UI-D9 — "Employees can upload documents." What is actually being asked for?
+
+**PE:** The client's words. Front desk has a folder of clinic PDFs — fasting
+instructions, the new cancellation policy, payer procedure notes. They should
+drag them in and have the assistant know them. Today `/ingest` takes a JSON
+`text` field, which means the only way to add a document is to open it, select
+all, copy, and paste into a textarea. Nobody will do that twice.
+
+**SE:** Agreed on the problem. I want to be precise about what we are opening,
+because a file input in a HIPAA system is not a widget.
+
+Right now `/ingest` accepts a string that has already passed through a browser,
+a JSON encoder, and Pydantic's `max_length=200_000`. A file upload replaces that
+with an arbitrary binary from an arbitrary desktop, parsed by a third-party
+library, inside the service that holds the vector store. PDF parsers are a
+historically rich source of memory-safety bugs. That is a new attack surface in
+the one service that can rewrite what the assistant believes.
+
+**PE:** So we validate. Every product ships file upload.
+
+**SE:** Every product ships file upload with a threat model. Mine has four
+entries and I want all four answered before we write the control:
+
+1. **Parser reachability.** What formats, and does the parser run in-process?
+2. **Resource exhaustion.** A 4KB zip bomb or a PDF with 60,000 pages.
+3. **Content trust.** The parsed text goes straight into the assistant's beliefs.
+4. **PHI.** This is the one that actually decides the design — see UI-D10.
+
+**PE:** Then let me push back on scope, because "answer all four" can mean six
+weeks. What is the smallest honest version?
+
+**SE:** Formats first. PDF, DOCX, TXT, MD covers the folder you described. I want
+to argue us *down* to three: **PDF, TXT, MD**, and defer DOCX.
+
+**PE:** Why? DOCX is what a policy is actually written in.
+
+**SE:** Because DOCX is a zip archive. Adding it means adding zip handling, which
+means adding the zip-bomb and path-traversal cases, on the same PR as everything
+else here. It is not that we cannot do it — it is that it belongs in its own
+change with its own tests. I would rather ship three formats that are genuinely
+tested than four where one is the reason the review is shallow.
+
+**PE:** I will take that if the UI names the gap instead of silently rejecting.
+An employee dropping a `.docx` should be told "DOCX support is coming; save as
+PDF for now", not handed "unsupported file type."
+
+**SE:** Fair, and cheap.
+
+**PE:** And the caps have to be visible before the drop, not after. A limit you
+discover by hitting it is a bug report.
+
+**SE:** Agreed. Stated on the control, enforced at the gateway, enforced again in
+the service. The UI stating a limit is a courtesy; it is never the check.
+
+> **DECISION UI-D9.** Add `POST /ai/knowledge/upload` — multipart, one file per
+> request. **Accepted formats: PDF, TXT, MD.** Explicit caps: **10 MB**,
+> **80 pages**, **200,000 extracted characters** (the existing `IngestRequest`
+> ceiling, so the upload path cannot smuggle a document the paste path would
+> reject). Extraction runs with `pypdf` in-process, wrapped so a parser failure
+> is a 422 rather than a 500.
+> **Rejected:** DOCX in this PR — deferred with a named UI message, tracked as
+> debt, because zip handling deserves its own review.
+> **Rejected:** parsing client-side in the browser — it would put the only copy
+> of the extraction logic somewhere we cannot audit, and the server would have to
+> trust text a client claims came from a PDF.
+
+---
+
+## UI-D10 — The upload is a PHI disclosure path, and the existing preview model does not cover it
+
+**SE:** This is the one I want to stop on, because I think we were about to ship
+a real breach.
+
+Look at what the knowledge collection actually is. `/ai/knowledge/query` is
+gated by `require_session` and nothing else:
+
+```python
+@app.post("/ai/knowledge/query")
+def proxy_kb_query(payload: dict, session: dict = Depends(require_session)):
+    return _post("ai", "/query", payload)
+```
+
+Since `#16`, patients have sessions. So the knowledge collection is readable —
+through the assistant's answers — by **every authenticated user, including every
+patient**. It is the one collection with no scope filter, by design, because
+clinic policy should be answerable to anyone who asks.
+
+**PE:** Right, that is the feature.
+
+**SE:** Now add upload. A front-desk employee drags in "Payer procedure notes",
+which happens to contain a worked example naming a real patient and their
+condition. We chunk it, embed it, and file it in the collection with no scope
+filter. Two days later a different patient asks the assistant a coverage
+question, and the retrieval surfaces that chunk — **with a citation**, because
+our grounding pipeline is good at what it does.
+
+That is an impermissible disclosure under 164.502(a), and our own audit log
+records it as a successful grounded answer.
+
+**PE:** We scrub on ingest. `scrub_document` already runs.
+
+**SE:** It runs, and it is deliberately **lenient**. Read its own docstring — it
+is the policy-document scrub, tuned to *keep* effective dates and the clinic's
+phone number, because a policy stripped of those is useless. It is the correct
+scrub for a policy. It is not a Safe Harbor scrub, and `safe_harbor_scrub` in the
+same module raises on purpose because we have not built it.
+
+So today's ingest quietly assumes the human pasting text has already read it.
+With paste, that assumption is nearly true — you cannot paste 40 pages without
+seeing them. With upload, the assumption is false the first time somebody drags
+in a file they have not opened.
+
+**PE:** So the fix is a better scrubber.
+
+**SE:** The fix is **not pretending a regex is a compliance control**. We wrote
+that finding for this client already. A stronger scrubber is worth having and it
+still will not catch a patient named in prose.
+
+**PE:** Then what? If I put a modal in front of every upload saying "are you
+sure", people click through it. Confirmation dialogs that appear every time are
+furniture.
+
+**SE:** Which is why it must not be a confirmation dialog. It has to be a
+**preview of the actual consequence**, and it has to be different every time so
+it cannot be muscle-memoried.
+
+Two-phase. Phase one, `POST /ai/knowledge/upload`, extracts and scrubs and
+returns a **staged** document: the extracted text as it will be indexed, every
+redaction the scrubber made, marked in place, and the chunk count. Nothing is
+written to the index. Phase two, `POST /ai/knowledge/upload/{staging_id}/commit`,
+is the only thing that writes.
+
+**PE:** I like it, and I want to sharpen the copy. The question on that screen
+is not "confirm?" It is *"this text will be readable by every patient who asks
+the assistant a related question."* Say the consequence, not the action.
+
+**SE:** Yes. And I want the redaction list shown as **reassurance and warning at
+once**: "we removed 3 things that looked like identifiers" tells the uploader the
+scrubber is real, and it tells them the scrubber found identifiers in a document
+they were about to publish — which is exactly when they should read it again.
+
+**PE:** What is the staging lifetime? If it is a database table I have opinions
+about cleanup.
+
+**SE:** Redis, TTL 30 minutes, keyed by a random id and **bound to the uploading
+username**. Two reasons for the binding. It stops one employee committing another
+employee's staged document, and it keeps `added_by` provenance honest — the
+gateway already stamps that server-side and a staging handoff must not become the
+gap where a client gets to choose it.
+
+**PE:** Then the HITL story gets better too. The client asked for human-in-the-
+loop. Right now our only HITL is the W4 sensitivity gate, which is genuinely a
+gate but fires rarely. This one fires on every single knowledge write, which is
+the highest-blast-radius write in the system.
+
+**SE:** Agreed, and it is a better example for the deck than the one we had.
+
+> **DECISION UI-D10.** Upload is **two-phase**: stage → preview → commit. Phase
+> one never writes to the index. The preview shows the exact text to be indexed,
+> in-place redaction markers, the redaction count and kinds, and chunk count.
+> Staging lives in Redis, **TTL 30 minutes, bound to the uploading username**;
+> commit by anyone else is 403 (not 404 — the uploader is allowed to know their
+> own staging id is valid).
+> The confirm copy states the **consequence** — readable by every authenticated
+> user including patients — not the action.
+> **Rejected:** single-shot upload-and-index. **Rejected:** a generic "are you
+> sure" modal. **Rejected:** treating `scrub_document` as sufficient without a
+> human read; it is a lenient policy scrub and `safe_harbor_scrub` still raises.
+> **Recorded as a limitation for the client:** this is a *procedural* control
+> backed by a lenient automated one. It is not de-identification.
+
+---
+
+## UI-D11 — What changes in a UI because an agent is behind it, not an API?
+
+**PE:** The client's second instruction. I want to be careful not to answer it
+with vibes. What concretely changes?
+
+**SE:** Start from the failure modes, because that is where agent-backed and
+CRUD-backed genuinely diverge. A CRUD endpoint has two outcomes: it worked, or
+it errored. Ours has at least six, and five of them return HTTP 200:
+
+| Outcome | HTTP | What the user must understand |
+|---|---|---|
+| Grounded answer | 200 | Normal |
+| **Refused** — retrieval found nothing in scope | 200 | The system worked; the answer does not exist here |
+| **Withheld** — guardrail blocked the output | 200 | We produced something and chose not to show it |
+| **Ungrounded** — generated but grounding score below threshold | 200 | Do not act on this |
+| **Overridden** — the agent's prose contradicted the tool, tool won | 200 | The number is authoritative, the sentence was wrong |
+| **Stale** — served from a last-known value, payer unreachable | 200 | Correct as of a time, not as of now |
+| Transport / service down | 5xx | Broken |
+
+**PE:** And in a normal product every one of the middle five renders as either a
+spinner that ends, or a red box. That is the actual insight — I would have built
+"answer or error" and been wrong five times.
+
+**SE:** Which produces a specific failure I care about more than any of them:
+**a refusal that looks like a bug gets retried**, and a refusal that looks like an
+empty answer gets treated as "no allergies on file." That second one is the
+Week-2 finding restated as a UI defect. The gold-set case that started this whole
+engagement was an assistant confidently saying "No known allergies on file" about
+a patient with a penicillin allergy.
+
+**PE:** So rule one: **a refusal is a first-class answer with its own visual
+treatment.** Not an error, not empty state, and never rendered as silence.
+
+**SE:** Rule two follows from the same place. **Provenance is not a detail
+view.** Every grounded answer shows what it was grounded on, inline, before the
+user has to ask. If the citation is one click away, the citation does not exist.
+
+**PE:** Rule three is mine and it is about time. These calls are seconds, not
+milliseconds, and a multi-agent view fans out across four domains. A spinner for
+six seconds reads as broken.
+
+**SE:** The graph already returns `path` — the node sequence it executed. We log
+it. Surfacing it turns dead time into an explanation: *authorize → assemble →
+summarise*. It is honest, it is free, and it is the single best asset in the
+demo, because it is the only place where "multi-agent" stops being a word on a
+slide.
+
+**PE:** Rule four: **when a human gate fires, it has to look like a decision, not
+a delay.** The W4 sensitivity interrupt currently pauses a graph run. If the UI
+renders that as a spinner, we have built a hang.
+
+**SE:** And rule five, which is the one nobody asks for: **the people who feed
+the corpus have to see its quality.** The eval report is currently terminal
+output read by us. The person who can actually fix a 0.556 fragment coverage is
+the front-desk lead who knows Maria has three charts — and they will never run
+`pytest`.
+
+**PE:** That reframes the quality dashboard. I had it as a credibility artifact
+for the client. You are saying it is an operational tool for staff.
+
+**SE:** Both, and if it is only the first we should not build it.
+
+> **DECISION UI-D11.** Five workflow rules, applied across every agent-backed
+> screen and recorded in `adr/0015`:
+> 1. **Refusal is a first-class answer.** Distinct treatment, never an error,
+>    never empty. Absence is stated ("no allergy recorded at this encounter"),
+>    never implied by blank space.
+> 2. **Provenance is inline.** Citations render with the answer, not behind a
+>    disclosure.
+> 3. **Show the path, not a spinner.** The graph's `path` is the progress
+>    indicator.
+> 4. **A human gate renders as a decision**, with the stakes named and both
+>    outcomes explicit.
+> 5. **Corpus quality is a staff screen**, not a report we read.
+> **Rejected:** a generic loading spinner on agent calls. **Rejected:** citations
+> behind a "sources" toggle. **Rejected:** rendering refusals through the error
+> component, which is what every one of these screens would have done by default.
+
+---
+
+## UI-D12 — Does the quality dashboard show the client a number that makes us look bad?
+
+**PE:** Blunt version: the eval reports context recall `1.0` and fragment
+coverage `0.556`. If we put that on a screen the client sees a failing grade.
+
+**SE:** They see a true number. The alternative is that we know it and they do
+not.
+
+**PE:** I am not arguing for hiding it. I am arguing that `0.556` with no frame
+is worse than useless — it reads as "the AI is 55% correct", which is not what it
+means. It means the *data they gave us* splits one person across three charts,
+and the retrieval is doing exactly what it should.
+
+**SE:** Then the fix is the framing, not the number. Put the two side by side and
+label them for what they are: retrieval is working, the record is fragmented.
+
+**PE:** And name the consequence in a sentence a non-engineer can repeat in a
+meeting. "One patient, three charts. An assistant that answers from one chart
+gives a clinically incomplete answer." That sentence is the whole engagement.
+
+**SE:** I will add one requirement. The three-chart split renders as **actual
+patient rows with actual chart ids**, not as a percentage. `0.556` is arguable.
+"Maria Gonzalez — charts 1042, 1330, 1588" is not.
+
+**PE:** Agreed. And the `clinically_incomplete_answers` count gets its own
+treatment — that is not a metric, that is a list of times the system would have
+told someone the wrong thing.
+
+> **DECISION UI-D12.** The quality screen leads with the **contrast**: retrieval
+> metrics beside integrity metrics, explicitly labelled so a reader cannot
+> mistake a data problem for a model problem. Fragmentation renders as named
+> patients and chart ids, not only a rate. `clinically_incomplete_answers` gets a
+> severity treatment.
+> **Rejected:** omitting or rounding the number. **Rejected:** showing it raw
+> without the frame — an unframed true number that reliably causes a false
+> conclusion is not honesty, it is abdication.
+
+---
+
+## UI-D13 — The approvals queue we cut
+
+**PE:** `/approvals` was in the plan for `#20` and I cut it, because there is no
+backend endpoint listing paused runs. I want to reopen that, because the client
+asked for HITL and a gate nobody can find is not a gate.
+
+**SE:** The cut was correct at the time and the reasoning still holds: I will not
+invent a list endpoint in a UI PR. But the conclusion — no queue — is wrong.
+
+**PE:** So we add the endpoint.
+
+**SE:** With a caveat I want written down, because it is the kind of thing that
+gets sold as more than it is. Our checkpointer in this configuration is
+`InMemorySaver` unless `agent_durable_memory` is set. A paused run lives in one
+process's memory. An approvals queue backed by that is a queue that empties on
+restart.
+
+**PE:** That is not a queue, that is a session.
+
+**SE:** Correct. So either we ship it honestly labelled, or we make the
+checkpointer durable first.
+
+**PE:** What does durable cost?
+
+**SE:** `SqliteSaver` behind the existing flag is small. Making it *encrypted* —
+which is what a paused run holding assembled PHI actually requires under
+164.312(a)(2)(iv) — is `EncryptedSerializer`, which we already researched and
+already reference in `adr/0009`. The work is wiring and tests, not discovery.
+
+**PE:** Then do that, and the queue is real.
+
+**SE:** One more thing and then I am satisfied. The queue must show **what is
+being approved**, not just that something is. "Approve run `view-a3f9`" is a
+button that gets clicked. "Release a record assembled across 3 charts for Maria
+Gonzalez, including a sensitive-flagged encounter" is a decision.
+
+> **DECISION UI-D13.** `/approvals` is **restored**, and gains the backend it
+> needed: `GET /ai/approvals` listing runs paused at the sensitivity gate. The
+> checkpointer moves to the durable, encrypted path so the queue survives a
+> restart. Each row states the patient, the chart span, and why the gate fired.
+> **Rejected:** a queue over `InMemorySaver` — it looks like a control and is a
+> session. **Rejected:** deferring HITL surfacing to a later week; the client
+> asked for it and we have exactly one gate to show.
+
+---
+
+## UI-D14 — Does `can_ingest` gate the control, or the page?
+
+**PE:** Small one, but I have seen it done wrong. `/me` returns `can_ingest`. Do
+we hide the whole knowledge admin page from staff who lack it, or show the page
+and disable the upload?
+
+**SE:** Show the page, hide the write control. Two reasons. Query and eval are
+open to any authenticated user by design, so the page has content for everyone.
+And a page that vanishes teaches people the feature does not exist, so they ask
+for it to be built rather than asking for access.
+
+**PE:** Agreed, with the copy requirement: the absent control is replaced by a
+line saying who to ask, not by nothing.
+
+**SE:** And the standing rule holds — the UI hiding a control is cosmetic. The
+gateway's `require_ingest` is the check, and there is a test that posts an
+upload as a non-privileged session and expects 403.
+
+> **DECISION UI-D14.** `can_ingest` hides the **write control**, not the page,
+> and is replaced by a line naming who grants access. Enforcement stays at the
+> gateway; the UI hint is never the check, and a test pins the 403.
+
+---
+
+## Standing question, Part III
+
+> **Before any of these merges: can a person do this in a browser, and did we
+> watch them do it?**
+
+Answered wrongly five times now — four backend PR bodies and `#17`. `#17`'s body
+carries the retraction. The stack is up, the journeys run, and the answer for
+every PR in this part must be a pasted test result, not an intention.
+
