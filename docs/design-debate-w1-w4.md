@@ -889,3 +889,302 @@ Answered wrongly five times now — four backend PR bodies and `#17`. `#17`'s bo
 carries the retraction. The stack is up, the journeys run, and the answer for
 every PR in this part must be a pasted test result, not an intention.
 
+
+---
+
+# Part IV — the front desk, the patient, and the approval
+
+**Date:** 2026-07-29, after `#19` merged
+**Scope:** the W3 and W4 screens, and the workflow shifts each forces.
+
+Part III set five rules for agent-backed UI in the abstract. This part is where
+they meet two specific surfaces, and both turn out to need a decision the rules
+do not settle on their own.
+
+---
+
+## UI-D15 — Coverage staleness: how loud, and whose problem is it?
+
+**PE:** The chip has four states — active, inactive, pending, unknown — plus
+stale. I want stale to read as a small timestamp. "Active · as of 9:02am". It is
+information, not an alarm, and front desk sees this control fifty times a shift.
+
+**SE:** I want it loud, and I want to argue from what stale actually means rather
+than from how often it appears.
+
+`stale: true` means the circuit breaker was open or the payer timed out, so what
+we are showing is **the last value we successfully retrieved**. We do not know
+the current value. The patient standing at the desk may have lost coverage
+yesterday.
+
+**PE:** And if we make it a red banner, by week two everyone has learned to
+ignore red banners. That is worse than a timestamp, because then stale is
+invisible *and* we have trained people to skip warnings.
+
+**SE:** That is a fair mechanism and I accept it. But the timestamp alone fails a
+different way: `9:02am` next to `Active` reads as "verified at 9:02", which is
+the opposite of what happened. It was verified at 9:02 *and has not been
+verifiable since*. The words have to carry that, not the styling.
+
+**PE:** So the fix is the copy, not the colour.
+
+**SE:** Yes. "Active — last confirmed 9:02am, payer unreachable since." Two
+facts, no alarm. And the word "unreachable" is the one that has to be there,
+because it is the difference between a stale value and an old one.
+
+**PE:** Then I want one more thing: the chip must never render a bare status when
+it is stale. If the payer is unreachable and we show "Active" with no
+qualification anywhere, we have asserted something we do not know.
+
+**SE:** Agreed, and that is the testable version. A stale chip without the
+qualifier is a defect, not a style choice.
+
+> **DECISION UI-D15.** `CoverageChip` renders the status **plus** an explicit
+> unreachable-since clause whenever `stale` is true. Tone stays neutral — no red,
+> no icon-shouting — because a warning shown fifty times a shift is a warning
+> nobody reads. **The load is carried by the words, not the colour.** A stale chip
+> that renders a bare status is a defect; pinned by a component test.
+> **Rejected:** a timestamp alone ("as of 9:02am"), which reads as *verified at*
+> rather than *not verifiable since*. **Rejected:** red-alert styling.
+
+---
+
+## UI-D16 — Do we tell the user the assistant was wrong?
+
+**PE:** This is the one I have been avoiding. When `overridden: true`, the agent
+said something that contradicted the tool and we replaced it. Do we tell the
+front desk that happened?
+
+My instinct is no. It undermines confidence in a tool they have to use fifty
+times a day, and the *outcome* is already correct — we showed them the tool's
+number. Surfacing the mechanism only makes them distrust the whole thing.
+
+**SE:** I think that instinct is exactly backwards, and I want to be careful
+about why, because "always be transparent" is not the argument.
+
+The argument is: they are going to notice anyway. Not every time — but once. One
+day the reply reads slightly oddly against the chip beside it, and they will
+either quietly stop trusting the assistant with no way to say why, or they will
+escalate it as a bug. Both are worse than a one-line label.
+
+**PE:** Or they never notice, and we have spent trust for nothing.
+
+**SE:** Then consider the other direction. We built `check_consistency` because
+we expected the model to occasionally assert a coverage status the tool did not
+support. That override is the single most valuable safety control in Week 3 —
+and if it fires silently, we cannot tell whether it fires *usefully*. Nobody
+reports "the assistant was right in a way I did not see."
+
+**PE:** So the argument is observability, not honesty.
+
+**SE:** It is both, but observability is the one that survives scrutiny. A
+control whose activations are invisible cannot be evaluated, and an unevaluated
+safety control is how we end up claiming a protection we cannot evidence. We have
+written that finding for this client twice.
+
+**PE:** Fine — but I get the copy, and it is not going to say "the AI was wrong."
+It says what happened in terms of what is authoritative. "Corrected from the
+payer record." The payer is the authority; the assistant is a convenience. That
+framing is true and it does not invite distrust, it explains the hierarchy.
+
+**SE:** Better than mine. Take it.
+
+> **DECISION UI-D16.** An override is **shown**, labelled *"Corrected from the
+> payer record"* — framing the payer as authoritative rather than the assistant
+> as wrong. Rationale is observability first: a safety control whose activations
+> are invisible cannot be evaluated, and we will not claim a protection we cannot
+> evidence.
+> **Rejected:** silent override. **Rejected:** copy naming the assistant as
+> mistaken.
+
+---
+
+## UI-D17 — Does the front desk see the circuit breaker?
+
+**PE:** No. Absolutely not. "Circuit breaker half-open" means nothing to a
+receptionist and it is our internal plumbing.
+
+**SE:** I agree with the conclusion and want to reject the reasoning, because
+"users do not need to know" is how we end up hiding things that matter.
+
+The breaker state is genuinely not actionable *by them*. Whether the payer is
+unreachable because of an open breaker or a timeout changes nothing about what
+they should do — proceed with registration, mark coverage unverified. That is why
+it stays hidden: not because it is internal, but because **no reading of it
+changes their next action.**
+
+**PE:** And the thing that *is* actionable is already on the chip.
+
+**SE:** Right. But I want the distinction recorded, because it is the test we
+should apply to every internal signal we are tempted to surface: does knowing it
+change what this person does next? Staleness passes. Breaker state does not. The
+graph path in `#19` passes, narrowly, because it changes whether they wait.
+
+> **DECISION UI-D17.** Breaker state is **not** surfaced to the front desk. The
+> test applied — and to be reused for future internal signals — is *"does knowing
+> this change what this person does next?"* Staleness passes; breaker state does
+> not. **Rejected:** the reasoning "it is internal"; that is not a sufficient
+> reason on its own and would justify hiding staleness too.
+
+---
+
+## UI-D18 — Can a patient approve the sensitivity gate on their own record?
+
+**SE:** codex F8 caught this and it is the sharpest finding in the set. The
+existing resume route is guarded by `require_patient_access`:
+
+```python
+scope_mod.require_patient_access(require_scope(session), patient_id)
+```
+
+Maria has access to Maria's record. So Maria can approve the sensitivity gate on
+Maria's record. The subject of the release is the approver.
+
+**PE:** Which is... arguably fine? It is her record. Patients have a right of
+access under 164.524.
+
+**SE:** They do, and that is a genuinely good objection, so let me separate two
+things the single word "approve" is hiding.
+
+There is *"may this patient see their own record"* — yes, and the sensitivity
+gate should not be what decides that. And there is *"should this assembled,
+cross-chart, sensitivity-flagged view be released"* — which is a clinical and
+compliance judgement about material that may include another person's
+information, a provider's note about a third party, or a result whose delivery
+has a protocol.
+
+**PE:** So the gate is not asking the question I thought it was asking.
+
+**SE:** It is asking the second one. And a subject approving that is not
+human-in-the-loop; it is a rubber stamp with extra steps. Worse, it is a rubber
+stamp that our audit log will record as an approval, which is the exact class of
+unevidenced claim we keep correcting.
+
+**PE:** Then the honest answer is that the gate never had an authorization model
+and we did not notice because there was one kind of session.
+
+**SE:** Correct. And I want to say plainly that this is the same shape as the
+IDOR we fixed in `#18`: a check that was right about one question and silent
+about another.
+
+**PE:** Then I want the product consequence stated too, because "patients cannot
+approve" must not become "patients cannot see their record." If the gate fires on
+a patient's own view, the patient sees a clear *pending review* state — not an
+error, not an empty record, and not a spinner.
+
+**SE:** Yes. And that is the honest surface anyway: their record is not being
+withheld, it is being reviewed, and they should be told which.
+
+> **DECISION UI-D18.** A new `can_approve` capability, **staff-only**, surfaced on
+> `/me` beside `can_ingest`. A patient can **never** approve a gate on their own
+> record, even if they somehow hold the capability. When the gate fires on a
+> patient's own view, the patient sees an explicit **pending review** state that
+> distinguishes *being reviewed* from *withheld* and from *empty*.
+> **Rejected:** treating record access as approval authority — it conflates
+> 164.524 right-of-access with a release judgement about cross-chart,
+> sensitivity-flagged material.
+
+---
+
+## UI-D19 — Partial assembly: what does a patient see when one domain fails?
+
+**PE:** The view fans out across four domains — demographics, encounters, labs,
+coverage. If coverage times out, what do they see?
+
+**SE:** Not a failed page. That is the easy part and also where the default
+implementation goes wrong: one rejected promise, whole screen error, and the
+three domains that *did* load are thrown away.
+
+**PE:** Agreed on that. My question is the opposite one — if coverage is missing,
+do we render the page as if it were complete?
+
+**SE:** No, and this is Part III rule 1 applied to a shape it did not anticipate.
+An absent domain rendered as an empty section is indistinguishable from a domain
+that legitimately has nothing in it. "No labs on file" and "labs could not be
+loaded" are the same pixels and opposite facts — and one of them is the Week-2
+allergy failure wearing a different hat.
+
+**PE:** So per-domain state, not per-page.
+
+**SE:** Per-domain, and the two absences are worded differently. That is the whole
+requirement.
+
+**PE:** One addition. If any domain failed, the page header has to say the view is
+incomplete. Someone who scrolls to the section they care about will never see a
+notice that lives three sections down.
+
+**SE:** Accepted — a summary at the top, detail in place. Both, not either.
+
+> **DECISION UI-D19.** Domains render **independently**. A failed domain shows a
+> load failure distinct from a legitimately empty one — *"could not be loaded"*
+> never renders as *"none on file"*. If any domain failed, the page states that
+> the view is incomplete **at the top**, in addition to marking the domain in
+> place.
+> **Rejected:** whole-page error on one domain failure. **Rejected:** a single
+> notice at the bottom, which a reader who jumps to their section never sees.
+
+---
+
+## UI-D20 — What identifies an approval?
+
+**SE:** codex F9. Resume currently forwards a client-supplied `thread_id`:
+
+```python
+"thread_id": payload.get("thread_id", ""),
+```
+
+The gateway checks the path `patient_id` and then trusts the client for which run
+to resume. Same shape as F1 — right about one input, silent about another.
+
+**PE:** Is it exploitable? The GET builds the thread id server-side as
+`view-{username}-{patient_id}`, so it is guessable but scoped to a patient the
+caller already passed the access check on.
+
+**SE:** Today, probably not exploitable — and I do not want to defend a boundary
+on "probably not". The thread id is a *graph implementation detail* that has
+become part of the client contract. That is the actual defect: the moment we
+change the checkpointer's threading scheme, we change an API, and the moment a
+queue lists other people's runs, the guess becomes a lookup.
+
+**PE:** So an opaque id.
+
+**SE:** Server-issued, bound to patient, requester, gate state and permitted
+approver. The client gets a token it cannot construct and cannot reason about,
+which is the right amount for it to know.
+
+**PE:** And the queue row shows the human meaning, not the token. "Release a
+record assembled across 3 charts for Maria Gonzalez, including a
+sensitivity-flagged encounter" — not `view-a3f9`.
+
+**SE:** Which is Part III rule 4. A button labelled with a run id gets clicked; a
+sentence describing a release gets read.
+
+> **DECISION UI-D20.** Resume takes an **opaque server-issued approval id**, bound
+> to patient, requester, gate state and permitted approver. `thread_id` leaves the
+> client contract entirely. Queue rows state the decision in domain terms; the id
+> is never the label.
+> **Rejected:** keeping `thread_id` as the client-facing handle — it makes a
+> checkpointer implementation detail into an API, and turns a guess into a lookup
+> the moment a queue exists.
+
+---
+
+## What Part IV changed about how the UI treats the agents
+
+Three of these six decisions are the same underlying shift, and it is worth
+naming because it is the client's actual question — *how should the UI change
+because agents are behind it?*
+
+**A CRUD UI reports outcomes. An agent UI has to report the provenance of
+outcomes.** Staleness (UI-D15) is a coverage value plus where it came from.
+Override (UI-D16) is a coverage value plus which of two sources won. Partial
+assembly (UI-D19) is a record plus which parts of it are actually there. In each
+case the value alone is true and misleading, and the qualifier is what makes it
+usable.
+
+The other three are authorization decisions that only became visible once
+principals were plural: who may approve (UI-D18), what identifies the thing being
+approved (UI-D20), and which internal state is worth surfacing at all (UI-D17).
+All three were latent from the moment `#16` gave patients sessions, and none were
+caught by tests that were individually correct.
+

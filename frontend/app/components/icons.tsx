@@ -134,3 +134,12 @@ export const IconKnowledge = (p: IconProps) => (
     <path d="M16 4.5h-5a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H16z" />
   </svg>
 );
+
+// W3 (2/2) — eligibility / coverage.
+export const IconCoverage = (p: IconProps) => (
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"
+       strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <path d="M10 2.8l5.4 2.2v4.6c0 3.3-2.2 6.1-5.4 7.6-3.2-1.5-5.4-4.3-5.4-7.6V5z" />
+    <path d="M7.6 9.9l1.8 1.8 3.2-3.6" />
+  </svg>
+);

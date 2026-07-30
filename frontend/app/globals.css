@@ -1212,3 +1212,27 @@ textarea:focus-visible,
   text-align: right;
   white-space: nowrap;
 }
+
+/* W3 (2/2) — the coverage chip. UI-D15: staleness is carried by the WORDS, not
+   the colour. A red banner shown fifty times a shift is a warning nobody reads,
+   so the badge keeps its ordinary variant and the qualifier sits beside it. */
+.rb-coverage {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rb-coverage__note {
+  font-size: 0.78rem;
+  color: var(--rb-text-muted);
+}
+.rb-coverage__payer {
+  font-size: 0.78rem;
+  color: var(--rb-text-faint);
+}
+.rb-coverage-result {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 0;
+}

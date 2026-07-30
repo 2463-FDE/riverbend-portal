@@ -11,6 +11,7 @@ import {
   IconIntake,
   IconRoi,
   IconKnowledge,
+  IconCoverage,
   IconMessages,
   IconBilling,
   IconBell,
@@ -30,6 +31,7 @@ const NAV: NavItem[] = [
   { href: "/appointments", label: "Appointments", icon: <IconCalendar className="rb-nav__icon" /> },
   { href: "/records", label: "Records", icon: <IconRecords className="rb-nav__icon" /> },
   { href: "/knowledge", label: "Knowledge", icon: <IconKnowledge className="rb-nav__icon" /> },
+  { href: "/eligibility", label: "Eligibility", icon: <IconCoverage className="rb-nav__icon" /> },
   { href: "/intake", label: "Intake", icon: <IconIntake className="rb-nav__icon" /> },
   { href: "/roi", label: "Release of Information", icon: <IconRoi className="rb-nav__icon" /> },
 ];
