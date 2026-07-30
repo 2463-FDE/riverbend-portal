@@ -29,11 +29,51 @@ make seed          # schema + demo data
 open http://localhost:3070
 ```
 
-| user | password | is |
+### The three roles, and why there are three
+
+| Login | Password | Principal | Sees | Can |
+|---|---|---|---|---|
+| `maria.gonzalez` | `portal123` | **patient** · chart 1042 | charts 1042, 1330, 1588 — her own, merged | nothing privileged |
+| `frontdesk` | `portal123` | **staff** | any chart in context | add documents · request a release |
+| `rdelgado` | `portal123` | **staff** | any chart in context | add documents · **approve someone else's** release |
+
+The third login is not padding. Two of the controls only exist between *two
+different people*:
+
+- a **patient** cannot approve the release of their own record — that is the
+  subject rubber-stamping their own disclosure;
+- a **staff member** cannot approve the release *they themselves requested* — a
+  queue you can empty yourself has no second pair of eyes in it.
+
+Demonstrating either one requires `frontdesk` **and** `rdelgado`. With a single
+staff login the approvals beat looks like a form, not a control.
+
+### Set up before you present
+
+Open **two browser profiles** side by side — sessions live in `localStorage`, so
+two tabs in one profile will fight over the token and you will spend the demo
+logging back in.
+
+| Window | Signed in as |
+|---|---|
+| Left | `maria.gonzalez` — the patient |
+| Right | `frontdesk`, then `rdelgado` for the approval |
+
+### Which role drives which beat
+
+| Beat | Driven by | The point |
 |---|---|---|
-| `maria.gonzalez` | `portal123` | patient, bound to chart 1042 |
-| `frontdesk` | `portal123` | staff, can add knowledge documents |
-| `rdelgado` | `portal123` | staff, second approver |
+| **A1** | `maria.gonzalez` | Her record spans 3 charts; the allergy is on one her login is *not* attached to |
+| **A2** | `frontdesk` → `rdelgado` | The release decision, and both refusals — subject, then requester |
+| **A3** | `maria.gonzalez` | Someone else's chart and a nonexistent one give the *identical* answer |
+| **A4** | `frontdesk` | A grounded answer with sources, then a refusal that is not an error |
+| **A5** | `frontdesk` | The ingest gate — read what you are about to publish to every patient |
+| **A6** | `frontdesk` | Retrieval `1.000` beside coverage `0.556` — both true at once |
+| **A7** | `frontdesk` | Payer stopped; registration still completes |
+
+If you only have ten minutes: **A1, A2, A6.** A1 sets up the problem, A2 is the
+control working between two people, A6 is the number that reframes the whole
+engagement.
 
 ### A1 — Log in as Maria, and look at what she can see *(~2 min)*
 
