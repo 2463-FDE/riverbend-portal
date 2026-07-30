@@ -14,6 +14,7 @@ Inherited shortcomings:
     therefore COARSE: the gate narrows which PATIENT, not which staff role.
     That distinction must not be oversold as least-privilege.
 """
+import uuid
 from typing import Optional
 
 import httpx
@@ -183,6 +184,10 @@ def me(session: dict = Depends(require_session)):
         # without guessing the policy client-side. The gateway stays the single
         # authority — this is a hint for the UI, not the check.
         "can_ingest": authz.can_ingest(session),
+        # W4 / UI-D18. Separate capability from ingest -- approval discloses one
+        # patient's assembled record, ingest changes what the assistant believes.
+        # Rendering hint only; require_approve is the check.
+        "can_approve": authz.can_approve(session),
         # W4: the portal renders the right landing view without guessing policy.
         "patient_id": session.get("patient_id"),
         "scope": require_scope(session).as_dict(),
@@ -355,22 +360,96 @@ def proxy_patient_view(patient_id: int, session: dict = Depends(require_session)
     """
     scope = require_scope(session)
     scope_mod.require_patient_access(scope, patient_id)
+
+    # Whether this assembly is disclosure-shaped, decided HERE because the
+    # gateway is the only place that knows both the principal and the identity
+    # cluster (RVB-AG-12).
+    #
+    # Narrow on purpose. The graph's own docstring says a human gate on a
+    # high-volume path is a workaround generator rather than a control, so this
+    # fires only when BOTH hold:
+    #
+    #   * the requester is staff -- a patient reading their own record is a
+    #     164.524 right of access, not a disclosure decision, and gating it would
+    #     also deadlock, since UI-D18 says a subject may never approve their own
+    #     release; and
+    #   * the record is MERGED -- the assembly materialises a decision that
+    #     several charts are one person, which is the thing worth a second pair
+    #     of eyes.
+    #
+    # Without this the gate was unreachable from the portal: nothing passed
+    # `cross_patient`, so `default_sensitive` was always False and the approvals
+    # queue could only ever be empty. A control nobody can reach is not a control.
+    cluster = _same_as_lookup(patient_id)
+    disclosure_shaped = scope.principal == "staff" and len(cluster) > 1
+
+    payload_scope = scope.as_dict()
+    if scope.principal == "staff":
+        # Staff assembly must span the MERGED record, or a clinician gets the
+        # single chart the id happens to name. For Maria Gonzalez that is the
+        # fragment without her penicillin allergy, while her own portal view
+        # showed it -- the Week-2 finding pointed at the clinician.
+        #
+        # Supplied here rather than widened inside the graph: the gateway is the
+        # only place that owns both the session and the identity cluster, and the
+        # graph's authorize node stays a receiver of scope, never an author of it
+        # (adr/0009). `open_to_context` is unchanged, so this narrows what is
+        # assembled; it does not grant anything new.
+        payload_scope["patient_ids"] = cluster
+
+    # A FRESH thread per request. A stable one (`view-{user}-{patient}`) meant a
+    # second GET resumed the previous run instead of starting a new assembly --
+    # visible as a doubled node path. Resume no longer needs a guessable thread
+    # id, because the approvals registry holds it server-side (UI-D20).
+    thread_id = f"view-{uuid.uuid4().hex[:12]}"
+
     return _post("ai", "/patient-view", {
         "patient_id": patient_id,
-        "scope": scope.as_dict(),
-        "thread_id": f"view-{session.get('username', 'anon')}-{patient_id}",
+        "scope": payload_scope,
+        "cross_patient": disclosure_shaped,
+        "thread_id": thread_id,
     })
 
 
-@app.post("/ai/patient-view/{patient_id}/resume")
-def proxy_patient_view_resume(patient_id: int, payload: dict,
-                              session: dict = Depends(require_session)):
-    """Answer a run paused at the sensitivity gate (HITL)."""
-    scope_mod.require_patient_access(require_scope(session), patient_id)
-    return _post("ai", "/patient-view/resume", {
-        "patient_id": patient_id,
-        "thread_id": payload.get("thread_id", ""),
+# --------------------------------------------------------------------------- #
+# W4 — the HITL queue (adr/0015 rule 4, UI-D18, UI-D20, codex F8/F9)
+#
+# `POST /ai/patient-view/{id}/resume` is GONE. It took a client-supplied
+# `thread_id` and forwarded it verbatim, so the gateway checked WHICH PATIENT and
+# then trusted the client for WHICH RUN -- the same shape as the F1 IDOR. It was
+# also guarded by `require_patient_access`, which meant the subject of a record
+# could approve the sensitivity gate on their own record: not human-in-the-loop,
+# a rubber stamp the audit log records as an approval.
+# --------------------------------------------------------------------------- #
+@app.get("/ai/approvals")
+def proxy_approvals(session: dict = Depends(require_session)):
+    """The queue. Staff-only, and it lists other patients by construction."""
+    require_staff(session)
+    authz.require_approve(session)
+    return _get("ai", "/approvals")
+
+
+@app.post("/ai/approvals/{approval_id}")
+def proxy_decide_approval(approval_id: str, payload: dict,
+                          session: dict = Depends(require_session)):
+    """Decide a queued release by its opaque id.
+
+    The identity of the approver is taken from the SESSION and passed downstream
+    so the orchestrator can enforce "the approver is not the subject". A client
+    supplying its own `approver` would defeat exactly the check this exists for,
+    so the field is overwritten rather than merged.
+    """
+    require_staff(session)
+    authz.require_approve(session)
+
+    scope = require_scope(session)
+    log.info("approval decision user=%s id=%s approved=%s",
+             session.get("username"), approval_id, bool(payload.get("approved")))
+    return _post("ai", f"/approvals/{approval_id}", {
         "approved": bool(payload.get("approved")),
+        "approver": session.get("username", ""),
+        "approver_principal": scope.principal,
+        "approver_patient_id": session.get("patient_id"),
     })
 
 

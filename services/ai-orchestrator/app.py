@@ -754,8 +754,96 @@ def patient_view(req: PatientViewRequest):
         rid, view.authorized, view.released, view.sensitive,
         len(view.domains), ">".join(view.path),
     )
-    return {"request_id": rid, "thread_id": req.thread_id or f"view-{rid}",
-            **_view_payload(view)}
+
+    thread_id = req.thread_id or f"view-{rid}"
+    payload = {"request_id": rid, **_view_payload(view)}
+
+    # A run paused at the sensitivity gate becomes a queued DECISION rather than
+    # a thread id the client has to hold onto (adr/0015 rule 4, UI-D20). The
+    # opaque approval id is the only handle that leaves this service.
+    if view.paused:
+        import approvals
+        try:
+            approval = approvals.register(
+                patient_id=req.patient_id,
+                thread_id=thread_id,
+                requested_by=req.scope.username,
+                requested_principal=req.scope.principal,
+                authorized_ids=req.scope.patient_ids,
+                reason="disclosure_shaped_assembly",
+            )
+            payload["approval_id"] = approval.approval_id
+            payload["approval"] = approval.row()
+            log.info("view paused rid=%s approval=%s span=%d",
+                     rid, approval.approval_id, approval.chart_span)
+        except approvals.ApprovalsUnavailable as e:
+            # Fails CLOSED and says so. Without a registry the pause is
+            # unresolvable, and reporting it as a normal withhold would leave a
+            # clinician waiting on a decision nobody can see.
+            log.error("view paused but approvals registry is down rid=%s: %s", rid, e)
+            payload["approval_error"] = (
+                "This view needs a release decision, but the approvals queue is "
+                "unavailable. Nothing was disclosed.")
+
+    return payload
+
+
+@app.get("/approvals")
+def list_approvals():
+    """Runs paused at the sensitivity gate (RVB-AG-12)."""
+    import approvals
+    try:
+        return {"approvals": [a.row() for a in approvals.list_open()]}
+    except approvals.ApprovalsUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+class ApprovalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved: bool
+    approver: str = Field(default="", max_length=120)
+    approver_principal: str = Field(default="", max_length=40)
+    approver_patient_id: Optional[int] = None
+
+
+@app.post("/approvals/{approval_id}")
+def decide_approval(approval_id: str, req: ApprovalDecision):
+    """Resolve a queued decision by its OPAQUE id.
+
+    The thread id is looked up here, server-side, from a record bound to the
+    patient and the requester. The client never names a run.
+    """
+    import approvals
+    import patient_view_graph
+
+    rid = uuid.uuid4().hex[:12]
+    try:
+        approval = approvals.claim(
+            approval_id,
+            approver=req.approver,
+            approver_principal=req.approver_principal,
+            approver_patient_id=req.approver_patient_id,
+        )
+    except approvals.ApprovalForbidden as e:
+        log.warning("approval refused rid=%s id=%s approver=%s reason=%s",
+                    rid, approval_id, req.approver, e)
+        raise HTTPException(status_code=403, detail=str(e))
+    except approvals.ApprovalNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except approvals.ApprovalsUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    view = patient_view_graph.resume(
+        get_view_graph(), approved=req.approved,
+        patient_id=approval.patient_id, thread_id=approval.thread_id,
+    )
+    log.info("approval decided rid=%s id=%s approved=%s by=%s released=%s",
+             rid, approval_id, req.approved, req.approver, view.released)
+    audit.emit(log, request_id=rid,
+               outcome="released" if view.released else "withheld",
+               reason=f"approval:{approval_id}")
+    return {"request_id": rid, "approval_id": approval_id,
+            "approved": req.approved, **_view_payload(view)}
 
 
 @app.post("/patient-view/resume")
@@ -774,18 +862,50 @@ def patient_view_resume(req: ViewResumeRequest):
 
 
 def _view_payload(view) -> dict:
+    """What leaves this service — and the one place that decides it.
+
+    **Assembled PHI is withheld unless the view was RELEASED.** The graph's
+    `withhold` node cannot do this itself: `domains` carries a merge reducer
+    (`{**left, **right}`), so a node returning `{"domains": {}}` is a no-op and
+    the assembled content survives into the response. Verified live before this
+    guard existed -- a DENIED release still returned Maria's penicillin allergy,
+    which is the exact disclosure the human gate exists to prevent, with an audit
+    record saying it was refused.
+
+    Enforced at the serialization boundary rather than in a node because this is
+    the last point where the answer is unambiguous and reducer-independent.
+    """
+    released = bool(view.released)
     return {
         "patient_id": view.patient_id,
         "authorized": view.authorized,
-        "released": view.released,
-        "summary": view.summary,
-        "grounded": view.grounded,
-        "domains": view.domains,
+        "released": released,
+        "summary": view.summary if released else "",
+        "grounded": view.grounded if released else False,
+        # Domain STATUS is still useful to a caller -- it says which parts exist
+        # and which failed -- so the shape is preserved and the content is not.
+        "domains": view.domains if released else _redact_domains(view.domains),
         "deny_reason": view.deny_reason,
         "sensitive": view.sensitive,
         "approved": view.approved,
+        # Distinct from `sensitive`: an interrupted invoke returns state from
+        # BEFORE the gate, so `sensitive` is still False while the run is parked.
+        "paused": view.paused,
         "path": view.path,
     }
+
+
+def _redact_domains(domains: dict) -> dict:
+    """Keep the shape, drop the content."""
+    out = {}
+    for name, result in (domains or {}).items():
+        out[name] = {
+            "domain": result.get("domain", name),
+            "status": result.get("status", ""),
+            "data": [],
+            "note": "Not released. This section was assembled and withheld pending a release decision.",
+        }
+    return out
 
 
 @app.get("/graph/stats")

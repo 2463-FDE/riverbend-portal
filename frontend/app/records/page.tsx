@@ -13,10 +13,19 @@ function isResult(r: RecordItem): boolean {
 }
 
 export default function RecordsPage() {
-  // The records view loads by a patient id taken straight off the input/URL.
-  // The id is a sequential integer and the backend does NOT check ownership
-  // (IDOR — intentional teaching point; see docs/handover/portal.har). We pass
-  // whatever id is entered straight through to /api/records.
+  // The id is still taken from the input, and that is now fine: since #16
+  // (adr/0011) the gateway resolves an AuthorizedScope BEFORE proxying, so an
+  // unauthorized id never reaches records-service. Denials come back as 404
+  // rather than 403 to avoid an enumeration oracle.
+  //
+  // This comment previously said the backend performed no ownership check. That
+  // was true when it was written and false from #16 onward -- and a stale comment
+  // asserting a vulnerability is not harmless: the same class of comment, one
+  // claiming an invariant nothing enforced, is exactly what let the F1 IDOR
+  // survive four reviews (docs/findings/w2-knowledge-query-scope-idor.md).
+  //
+  // The 404 renders as "No records found for this patient", which is the correct
+  // surface for the 404-not-403 choice. Preserved deliberately.
   const [patientId, setPatientId] = useState("1042");
   const [data, setData] = useState<EncounterBlock[] | null>(null);
   const [selected, setSelected] = useState<EncounterBlock | null>(null);

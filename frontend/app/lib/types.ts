@@ -15,6 +15,9 @@ export interface MeResponse {
   username: string;
   role: string;
   can_ingest: boolean;
+  // W4 / UI-D18. Separate from can_ingest on purpose: ingest changes what the
+  // assistant believes, approval discloses one patient's assembled record.
+  can_approve?: boolean;
   patient_id: number | string | null;
   scope: {
     principal: "patient" | "staff";

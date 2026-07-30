@@ -17,6 +17,7 @@ import {
 } from "./components/icons";
 import { apiFetch, getUser } from "./lib/session";
 import { usePrincipal } from "./lib/principal";
+import { AssembledRecordCard } from "./components/AssembledRecordCard";
 import type { Appointment, EncounterBlock, RecordItem } from "./lib/types";
 import { fmtDateTime, firstName } from "./lib/format";
 
@@ -97,6 +98,16 @@ export default function DashboardPage() {
         <h1>Good day, {name}</h1>
         <p>Here&apos;s a summary of your care at Riverbend Community Health.</p>
       </div>
+
+      {/*
+        W4 (2/2) — a patient's landing shows their ASSEMBLED record, across every
+        chart the clinic holds for them (RVB-W4-U2). Staff keep the operational
+        dashboard; this is the one screen where the identity work is visible to
+        the person it protects.
+      */}
+      {principal?.kind === "patient" && principal.patientId !== null && (
+        <AssembledRecordCard patientId={principal.patientId} />
+      )}
 
       <div className="rb-grid rb-grid--2">
         {/* Next appointment */}

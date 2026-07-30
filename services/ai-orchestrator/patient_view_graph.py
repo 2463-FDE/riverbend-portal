@@ -133,6 +133,14 @@ class PatientView:
     patient_id: int
     authorized: bool
     released: bool
+    # True when the run stopped at `interrupt()` and is waiting on a human.
+    #
+    # Needed because an interrupted `invoke` returns the state as of BEFORE the
+    # interrupting node, so `sensitive` is still its default False. Inferring
+    # "paused" from the payload therefore reported every paused run as a normal
+    # unreleased one, and nothing was ever queued for a decision -- the gate fired
+    # and then vanished.
+    paused: bool = False
     summary: str = ""
     grounded: bool = False
     domains: dict = field(default_factory=dict)
@@ -185,10 +193,22 @@ def build_graph(
                 "path": ["authorize"],
             }
 
-        # The narrowed set every branch will receive. For a patient principal
-        # this is their own id plus SAME_AS fragments; for staff it is exactly
-        # the patient in context — never "everything staff could ask for".
-        ids = [patient_id] if open_to_context else sorted(allowed_ids)
+        # The narrowed set every branch will receive. For a patient principal it
+        # is their own id plus SAME_AS fragments. For staff it is the patient in
+        # context plus that patient's fragments -- never "everything staff could
+        # ask for", which is why the gateway supplies the cluster explicitly
+        # rather than this node widening on its own.
+        #
+        # It used to be exactly `[patient_id]` for staff, and that was wrong in
+        # the worst available direction: a clinician assembling Maria Gonzalez's
+        # record received chart 1042 only -- the fragment WITHOUT her penicillin
+        # allergy -- while Maria's own portal view, scoped to all three charts,
+        # showed it. The Week-2 finding, pointed at the clinician instead of the
+        # patient. See docs/findings/w4-staff-view-single-chart.md.
+        if open_to_context:
+            ids = sorted(allowed_ids | {patient_id}) if allowed_ids else [patient_id]
+        else:
+            ids = sorted(allowed_ids)
 
         return {"authorized": True, "authorized_ids": ids, "path": ["authorize"]}
 
@@ -385,7 +405,26 @@ def run(
         },
         config=config,
     )
-    return _to_view(state, patient_id)
+    return _to_view(state, patient_id, paused=is_paused(graph, config))
+
+
+def is_paused(graph, config) -> bool:
+    """Did the run stop at an `interrupt()`?
+
+    Asked of the CHECKPOINTER rather than inferred from the returned state,
+    because an interrupted `invoke` returns the state from before the
+    interrupting node -- so the flag the gate would have set is not there yet.
+    """
+    try:
+        snapshot = graph.get_state(config)
+    except Exception:  # noqa: BLE001
+        return False
+
+    if getattr(snapshot, "next", None):
+        for task in getattr(snapshot, "tasks", ()) or ():
+            if getattr(task, "interrupts", None):
+                return True
+    return False
 
 
 def resume(graph, *, approved: bool, patient_id: int, thread_id: str) -> PatientView:
@@ -398,12 +437,13 @@ def resume(graph, *, approved: bool, patient_id: int, thread_id: str) -> Patient
 
     config = {"configurable": {"thread_id": thread_id}}
     state: Any = graph.invoke(Command(resume=approved), config=config)
-    return _to_view(state, patient_id)
+    return _to_view(state, patient_id, paused=is_paused(graph, config))
 
 
-def _to_view(state: dict, patient_id: int) -> PatientView:
+def _to_view(state: dict, patient_id: int, paused: bool = False) -> PatientView:
     return PatientView(
         patient_id=patient_id,
+        paused=paused,
         authorized=bool(state.get("authorized")),
         released=bool(state.get("released")),
         summary=state.get("summary", ""),

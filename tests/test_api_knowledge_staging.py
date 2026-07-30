@@ -72,6 +72,9 @@ class FakeRedis:
     def scard(self, key):
         return len(self.sets.get(key, set()))
 
+    def smembers(self, key):
+        return set(self.sets.get(key, set()))
+
     def expire(self, key, ttl):
         return True
 

@@ -47,7 +47,7 @@ function pdf(name = "fasting.pdf") {
 }
 
 beforeEach(() => {
-  window.localStorage.setItem("rb.token", "test-token");
+  window.localStorage.setItem("riverbend.token", "test-token");
 });
 
 afterEach(() => {

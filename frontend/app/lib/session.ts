@@ -25,14 +25,36 @@ export function getUser(): PortalUser | null {
   }
 }
 
+/**
+ * Broadcast that the session changed.
+ *
+ * `AppShell` lives in the root layout, so it mounts ONCE — on `/login`, before a
+ * token exists. Anything that resolved identity in a mount-only effect therefore
+ * resolved it as "no session" and never revisited: after logging in, client-side
+ * navigation re-renders the shell but does not remount it.
+ *
+ * That is not hypothetical. It shipped: the principal-aware navigation fell
+ * through to the STAFF default and showed a patient the staff menu, live, while
+ * every component test passed because tests mount fresh. Storage is not reactive,
+ * so the write has to say so.
+ */
+export const SESSION_EVENT = "riverbend:session";
+
+function announce(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(SESSION_EVENT));
+}
+
 export function setSession(token: string, user: PortalUser): void {
   window.localStorage.setItem(TOKEN_KEY, token);
   window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+  announce();
 }
 
 export function clearSession(): void {
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+  announce();
 }
 
 // fetch wrapper that attaches the bearer token to our own /api routes. The

@@ -1236,3 +1236,21 @@ textarea:focus-visible,
   gap: 12px;
   padding: 10px 0;
 }
+
+/* W4 (2/2) — the assembled patient view. Per-domain sections, because one failed
+   loader must not fail the page and a failed domain must not look like an empty
+   one (UI-D19). */
+.rb-domain {
+  padding: 12px 0;
+  border-top: 1px solid var(--rb-border);
+}
+.rb-domain:first-of-type {
+  border-top: none;
+}
+.rb-domain__list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--rb-text);
+}

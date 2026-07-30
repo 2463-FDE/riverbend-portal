@@ -17,12 +17,13 @@ commit finds nothing rather than double-indexing (codex F7).
 One employee must not be able to commit another's document, and provenance must
 stay server-stamped across the two-request handoff.
 """
-import json
 import os
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Optional
+
+import crypto_box
 
 TTL_SECONDS = 30 * 60             # RVB-ING-15
 MAX_STAGED_PER_USER = 5           # RVB-ING-41
@@ -85,61 +86,6 @@ class StagedDoc:
 
 
 # --------------------------------------------------------------------------- #
-# encryption — same key path as the checkpointer (codex F11)
-# --------------------------------------------------------------------------- #
-def _key() -> Optional[bytes]:
-    raw = os.getenv("LANGGRAPH_AES_KEY", "")
-    if not raw:
-        return None
-    key = raw.encode()
-    # AES wants 16/24/32. Deriving rather than erroring keeps dev usable without
-    # making the production path depend on a lucky key length.
-    if len(key) not in (16, 24, 32):
-        import hashlib
-        key = hashlib.sha256(key).digest()
-    return key
-
-
-def _seal(payload: dict) -> str:
-    raw = json.dumps(payload).encode()
-    key = _key()
-    if key is None:
-        # Dev/CI only. Marked in the envelope so a plaintext blob can never be
-        # mistaken for an encrypted one on inspection.
-        return json.dumps({"v": "plain", "d": raw.decode()})
-
-    from Crypto.Cipher import AES
-
-    cipher = AES.new(key, AES.MODE_GCM)
-    ct, tag = cipher.encrypt_and_digest(raw)
-    import base64
-    return json.dumps({
-        "v": "aes-gcm",
-        "n": base64.b64encode(cipher.nonce).decode(),
-        "t": base64.b64encode(tag).decode(),
-        "d": base64.b64encode(ct).decode(),
-    })
-
-
-def _open(blob: str) -> dict:
-    envelope = json.loads(blob)
-    if envelope.get("v") == "plain":
-        return json.loads(envelope["d"])
-
-    key = _key()
-    if key is None:
-        raise StagingUnavailable("staged document is encrypted but no key is configured")
-
-    import base64
-    from Crypto.Cipher import AES
-
-    cipher = AES.new(key, AES.MODE_GCM, nonce=base64.b64decode(envelope["n"]))
-    raw = cipher.decrypt_and_verify(base64.b64decode(envelope["d"]),
-                                    base64.b64decode(envelope["t"]))
-    return json.loads(raw.decode())
-
-
-# --------------------------------------------------------------------------- #
 # store
 # --------------------------------------------------------------------------- #
 _client = None
@@ -182,7 +128,7 @@ def stage(doc: StagedDoc) -> StagedDoc:
     doc.staging_id = doc.staging_id or uuid.uuid4().hex
     doc.created_at = doc.created_at or time.time()
 
-    r.setex(f"{KEY_PREFIX}{doc.staging_id}", TTL_SECONDS, _seal(asdict(doc)))
+    r.setex(f"{KEY_PREFIX}{doc.staging_id}", TTL_SECONDS, crypto_box.seal(asdict(doc)))
     r.sadd(owner_key, doc.staging_id)
     r.expire(owner_key, TTL_SECONDS)
     return doc
@@ -201,7 +147,7 @@ def peek(staging_id: str, username: str) -> StagedDoc:
             "that preview is no longer available — it was already added, or it "
             "expired. Check the knowledge base before uploading again.")
 
-    doc = StagedDoc(**_open(blob))
+    doc = StagedDoc(**crypto_box.unseal(blob))
     if doc.staged_by != username:
         raise StagingForbidden("that document was staged by someone else")
     return doc

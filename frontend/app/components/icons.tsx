@@ -143,3 +143,13 @@ export const IconCoverage = (p: IconProps) => (
     <path d="M7.6 9.9l1.8 1.8 3.2-3.6" />
   </svg>
 );
+
+// W4 (2/2) — the HITL approvals queue.
+export const IconApprovals = (p: IconProps) => (
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"
+       strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <path d="M6.5 3.5h7a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" />
+    <path d="M8 8.6l1.6 1.6L13 6.8" />
+    <path d="M8 13h4" />
+  </svg>
+);
