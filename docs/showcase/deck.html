@@ -6,18 +6,22 @@
 <title>Riverbend Community Health &mdash; Weeks 1&ndash;4</title>
 <style>
   :root {
-    --paper:      #F5F4F0;
-    --paper-2:    #EDEBE5;
-    --ink:        #17211E;
-    --ink-2:      #4A5551;
-    --ink-3:      #78827E;
-    --rule:       #D6D3CA;
-    --alert:      #C1362A;
-    --alert-bg:   #F7E7E4;
-    --shipped:    #2C6B64;
-    --shipped-bg: #E2EDEB;
-    --amber:      #9A6B10;
-    --amber-bg:   #F6ECD8;
+    /* DARK BY DEFAULT. This deck is projected, and ten full-bleed slides of
+       near-white at 100svh is glare in a room with the lights down. Light is one
+       click away via the toggle, and `prefers-color-scheme: light` still wins for
+       anyone reading it at a desk. */
+    --paper:      #141A18;
+    --paper-2:    #1D2523;
+    --ink:        #EDEBE4;
+    --ink-2:      #B3BBB7;
+    --ink-3:      #7F8985;
+    --rule:       #2E3835;
+    --alert:      #E8776A;
+    --alert-bg:   #2E1D1A;
+    --shipped:    #6FBDB2;
+    --shipped-bg: #162B28;
+    --amber:      #D9A94A;
+    --amber-bg:   #2C2412;
 
     --display: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino,
                "Book Antiqua", Georgia, serif;
@@ -27,22 +31,12 @@
             "Liberation Mono", monospace;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --paper:      #141A18;
-      --paper-2:    #1D2523;
-      --ink:        #EDEBE4;
-      --ink-2:      #B3BBB7;
-      --ink-3:      #7F8985;
-      --rule:       #2E3835;
-      --alert:      #E8776A;
-      --alert-bg:   #2E1D1A;
-      --shipped:    #6FBDB2;
-      --shipped-bg: #162B28;
-      --amber:      #D9A94A;
-      --amber-bg:   #2C2412;
-    }
-  }
+  /* Deliberately NOT following prefers-color-scheme.
+
+     A projected deck is dark regardless of what the presenter's laptop is set
+     to, and honouring the OS here is what produced ten full-bleed near-white
+     slides on a light-mode Mac. Light is available on the toggle and persists,
+     so anyone reading this at a desk chooses it once. */
   :root[data-theme="dark"] {
     --paper:      #141A18;
     --paper-2:    #1D2523;
@@ -261,19 +255,18 @@
 <style>
   /* Demo slide — the deliberate stop. Inverted so it is impossible to walk past
      while reading from a script. */
+  /* Inverted relative to whatever the deck currently is, so it reads as a stop
+     in both themes rather than only in light. */
   .demo {
     background: var(--ink);
     color: var(--paper);
-    margin-inline: calc(-1 * var(--pad, 0px));
   }
-  .demo h2, .demo h1 { color: var(--paper); }
-  .demo .lede, .demo p { color: #C8CFCC; }
-  .demo .tab { color: #8E9995; border-color: #34403C; }
-  .demo .tab b { color: #C8CFCC; }
-  .demo table { color: #C8CFCC; }
-  .demo th { color: #8E9995; border-bottom-color: #34403C; }
-  .demo td { border-bottom-color: #242E2B; }
-  .demo .mono, .demo .url { color: var(--shipped); }
+  .demo h1, .demo h2 { color: var(--paper); }
+  .demo p, .demo .lede { color: var(--paper-2); }
+  .demo .tab { color: var(--ink-3); border-color: var(--rule); }
+  .demo .tab b { color: var(--paper-2); }
+  .demo .beats .who { color: var(--shipped); }
+  .demo .url { color: var(--shipped); }
   .url {
     font-family: var(--data);
     font-size: clamp(1.1rem, 2.6vw, 1.7rem);
@@ -493,5 +486,30 @@
   the repository under <span class="mono">docs/findings/</span> and <span class="mono">adr/</span>.
 </footer>
 
+<button id="rb-theme" type="button" aria-label="Toggle light and dark">
+  <span aria-hidden="true">&#9681;</span>
+</button>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var btn = document.getElementById("rb-theme");
+  var saved = null;
+  try { saved = localStorage.getItem("rb-deck-theme"); } catch (e) {}
+  if (saved) root.setAttribute("data-theme", saved);
+
+  btn.addEventListener("click", function () {
+    var now = root.getAttribute("data-theme");
+    if (!now) {
+      // No explicit choice yet: flip away from whatever is being shown.
+      var dark = getComputedStyle(root).getPropertyValue("--paper").trim().toLowerCase();
+      now = (dark === "#141a18") ? "dark" : "light";
+    }
+    var next = now === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("rb-deck-theme", next); } catch (e) {}
+  });
+})();
+</script>
 </body>
 </html>

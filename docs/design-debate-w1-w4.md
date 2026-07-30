@@ -1370,3 +1370,77 @@ And the stub earns a standing caveat. It is not a neutral stand-in: it echoes it
 source, so it passes overlap checks by construction and makes any metric built on
 overlap look calibrated. Any threshold validated only in stub mode is unvalidated.
 
+---
+
+## UI-D23 — REOPENED and reversed after codex:rescue
+
+**Date:** 2026-07-30, same day, after review.
+
+**SE:** I have to withdraw UI-D23. The review called the change "net-negative for
+safety" and it was. Six fabrications that the old gate blocked, released:
+
+    "You are pregnant."                              overlap 0.500
+    "Your blood pressure was 160/100."               overlap 0.200
+    "Your lab results show elevated A1C."            overlap 0.167
+    "You had an anaphylactic reaction to penicillin."overlap 0.500
+    "Your sinus infection was caused by strep throat"overlap 0.500
+    "Your penicillin allergy has resolved."          overlap 0.500
+
+**PE:** You tested it against adversarial cases. I watched you do it.
+
+**SE:** I tested it against four cases that were the four categories
+`invented_clinical_claims` was *written to detect*. That is not an adversarial
+set, it is a restatement of the implementation. Every one passed, and passing
+told me nothing.
+
+Which is the same error as the thresholds themselves. The stub was validated
+against assumptions it was built under; so was my replacement.
+
+**PE:** So we put 0.55 back and the client's bug stays open.
+
+**SE:** After trying two more things, yes. Requiring every clinical term to be
+supported blocks all six attacks — and refuses every real answer, because model
+prose always contains words the record does not. Lowering the threshold does not
+work either: the flat contradiction scores 0.500 and faithful answers run
+0.481–0.600, so they overlap wherever you cut.
+
+**PE:** I want to be careful how we say this to the client, because "we could not
+fix it" and "we chose not to break it" are different sentences and only one is
+true.
+
+**SE:** The second one. The gate refuses about three correct answers in four,
+which is bad. Every alternative I measured either releases fabricated vital signs
+or refuses everything. Of those two failure modes only one is safe, so it stays
+where it is until there is a real entailment check.
+
+**PE:** And the part that DID get fixed is not nothing — her question retrieves
+now. The stemmer was giving three stems for one word, so "what am I allergic to?"
+shared no term with a chart saying "Allergies: penicillin". Coverage went 0.00 to
+0.50.
+
+**SE:** Right, and I want that stated precisely rather than rounded up. Retrieval
+is fixed. Grounding is not. Saying "the allergy question works now" would be the
+overstatement we keep correcting in other people's PR bodies.
+
+> **DECISION UI-D23 (revised).** The grounding gate is **unchanged**. The
+> demotion is withdrawn. `clinical_support` and `unsupported_clinical_terms` ship
+> measured, tested and **unwired**, as groundwork for sentence-level entailment
+> (D-14), which is what this actually needs.
+> **Rejected:** `invented_clinical_claims` as the sole gate — releases six
+> fabrications. **Rejected:** a lower overlap threshold — no value separates the
+> populations. **Rejected:** requiring every clinical term to be supported —
+> refuses every real answer, and tuning a stoplist is whack-a-mole on a safety
+> control.
+> **Accepted cost, stated to the client:** the assistant still refuses correct
+> answers, including some phrasings of the question that started this. Wrong in
+> the safe direction.
+
+### What this changes about how we validate a guardrail
+
+An adversarial set written by the person who wrote the guardrail tests the
+categories they already thought of. Mine did, and it passed six for six on cases
+that shared the implementation's assumptions.
+
+**The replacement for a safety control gets its attacks from someone else.** That
+is now the rule, and it is the reason `codex:rescue` runs on the change and not
+only on the design.

@@ -290,7 +290,16 @@ def build_graph(
             return {"summary": "", "grounded": False, "released": False,
                     "path": ["synthesize"], "deny_reason": f"synthesis_failed:{type(e).__name__}"}
 
-        verdict = guardrails.check(summary, context, settings.grounding_threshold)
+        # UNCHANGED, and known to false-refuse: measured live at 0.467-0.522
+        # against a 0.55 threshold, with no invented claims, so an assembled
+        # record is withheld roughly three times in three. Earlier passes were
+        # the boundary, not correctness.
+        #
+        # Left strict on purpose. Every weaker configuration measured either
+        # releases fabrications or refuses everything -- see rag_graph.ground_gate
+        # and ADR 0016. Wrong in the safe direction until entailment lands (D-14).
+        verdict = guardrails.check(summary, context, settings.grounding_threshold,
+                                   strict_terms=False)
         if not verdict.grounded:
             summary = guardrails.safe_fallback()
 

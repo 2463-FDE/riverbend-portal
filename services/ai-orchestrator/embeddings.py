@@ -23,6 +23,7 @@ The client packet flags Week 2 as a quota-risk week and says so explicitly:
 added a cache" and "the cache actually prevents the calls" are different claims.
 """
 import hashlib
+import logging
 import math
 import re
 import threading
@@ -33,6 +34,13 @@ from config import settings
 
 _WORD = re.compile(r"[a-z0-9]+")
 _lock = threading.RLock()
+
+
+log = logging.getLogger("ai-orchestrator")
+
+# The accepted RAG_EMBED_BACKEND values. Named so the error message can list
+# them and so a test can assert the set rather than a string literal.
+_BACKENDS = frozenset({"offline", "titan"})
 
 
 # --------------------------------------------------------------------------- #
@@ -48,15 +56,51 @@ _STOPWORDS = frozenset(
 
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase word tokens with a crude suffix stem. Deterministic."""
+    """Lowercase word tokens with a crude suffix stem. Deterministic.
+
+    The `-ies -> -y` rule is not cosmetic. Without it the stemmer produced three
+    different stems for one clinical concept:
+
+        allergy    -> allergy
+        allergies  -> allergi      (the "es" rule, leaving a stem matching nothing)
+        allergic   -> allergic
+
+    So a chart recording "Allergies: penicillin" shared NO term with the question
+    "what am I allergic to?", term coverage came out 0.00, and the query was
+    refused before it ever reached retrieval scoring. That is the exact symptom
+    the client reported. `-ies -> -y` collapses the first two; `allergic` is
+    handled as a synonym in `_EQUIV` rather than by stemming, because chopping
+    "-ic" would also mangle words like "clinic" and "generic".
+    """
     out = []
     for tok in _WORD.findall((text or "").lower()):
-        for suffix in ("ing", "ed", "es", "s"):
-            if len(tok) > 4 and tok.endswith(suffix):
-                tok = tok[: -len(suffix)]
-                break
-        out.append(tok)
+        if len(tok) > 4 and tok.endswith("ies"):
+            tok = tok[:-3] + "y"
+        else:
+            for suffix in ("ing", "ed", "es", "s"):
+                if len(tok) > 4 and tok.endswith(suffix):
+                    tok = tok[: -len(suffix)]
+                    break
+        out.append(_EQUIV.get(tok, tok))
     return out
+
+
+# Clinical adjective/noun pairs a suffix stemmer cannot bridge. Deliberately
+# tiny and deliberately explicit: each entry is a claim that two words mean the
+# same thing in a clinical record, which is not something to infer with a rule.
+_EQUIV = {
+    "allergic": "allergy",
+    "allergen": "allergy",
+    "medicine": "medication",
+    "med": "medication",
+    "meds": "medication",
+    "rx": "medication",
+    "dx": "diagnosis",
+    "diagnos": "diagnosis",
+    "diagnosi": "diagnosis",
+    "diagnose": "diagnosis",
+    "diagnostic": "diagnosis",
+}
 
 
 def content_terms(text: str) -> set[str]:
@@ -181,8 +225,43 @@ class Embedder:
         self._cache: dict[str, list[float]] = {}
 
     def _default_backend(self):
-        if settings.embed_backend == "titan" and not settings.use_stub:
+        """Pick the backend, and REFUSE an unrecognised name (ADR 0016 §1).
+
+        This used to be `if settings.embed_backend == "titan"` with a bare
+        fallback, so anything else -- including `bedrock`, the word the AWS docs
+        use everywhere -- silently selected the offline hashed bag-of-terms.
+
+        The two are not interchangeable. One is semantic; the other is lexical
+        overlap, and the difference decides whether "what am I allergic to?"
+        retrieves anything at all. A typo swapping a production component for a
+        dev stub, with no log line, means demoing a system that is not the system
+        -- and the identical retrieval scores it produced are the only reason
+        anyone noticed.
+
+        `offline` stays available. It has to be asked for.
+        """
+        if settings.embed_backend not in _BACKENDS:
+            raise ValueError(
+                f"RAG_EMBED_BACKEND={settings.embed_backend!r} is not recognised. "
+                f"Accepted: {', '.join(sorted(_BACKENDS))}. "
+                f"'offline' is the deterministic hashed bag-of-terms used in dev "
+                f"and CI; 'titan' is Bedrock Titan embeddings and needs a "
+                f"credential."
+            )
+
+        if settings.embed_backend == "titan":
+            if settings.use_stub:
+                # Stub mode has no credential by definition. Say which one you
+                # got and why, rather than silently returning a different
+                # retriever than the configuration asked for.
+                log.warning(
+                    "RAG_EMBED_BACKEND=titan but USE_STUB_BEDROCK is true; "
+                    "using the offline embedder. Retrieval is LEXICAL, not "
+                    "semantic -- natural-language questions will under-retrieve."
+                )
+                return OfflineEmbedder(self.dims)
             return TitanEmbedder(self.dims, settings.embed_model_id)
+
         return OfflineEmbedder(self.dims)
 
     def _key(self, text: str) -> str:

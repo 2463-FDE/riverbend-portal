@@ -143,7 +143,11 @@ def summarize(req: SummaryRequest):
             "The summary service is temporarily unavailable. Please try again shortly.",
         )
 
-    verdict = guardrails.check(result.text, clean, settings.grounding_threshold)
+    # REWRITE, not synthesis: plainer wording is the whole feature, so the
+    # stay-inside-the-source-vocabulary check does not apply (ADR 0016 §3).
+    # Invented dosages and medications are still withheld by check 1.
+    verdict = guardrails.check(result.text, clean, settings.grounding_threshold,
+                               strict_terms=False)
     summary = result.text if verdict.grounded else guardrails.safe_fallback()
 
     audit.emit(
