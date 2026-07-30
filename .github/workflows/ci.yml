@@ -61,11 +61,88 @@ jobs:
         # paths is thin — tracked in RIV-201.
         run: pytest -m "not integration" -q
 
+  # The job that would have caught three defects on the commit that introduced
+  # them. See docs/findings/w1ui-nothing-ever-ran-the-stack.md.
+  #
+  # Until this existed, NOTHING in CI started the stack. Three defects shipped
+  # behind 248 green tests: a schema.sql that could not initialise at all, a
+  # corpus path that resolved only outside a container, and -- because of the
+  # second -- a live scope narrowing that hid a patient's penicillin allergy from
+  # her. Every test mocked the database or ran from the repo root, so every test
+  # passed.
+  #
+  # The tests were fine. They were testing a different system: repo root vs /app,
+  # mocks vs real Postgres, in-process calls vs HTTP between containers. All three
+  # defects lived in that gap, and no amount of extra unit testing reaches it.
+  stack-smoke:
+    runs-on: ubuntu-latest
+    needs: [services, tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Bring the stack up
+        # From a CLEAN volume, which is the case that broke: schema.sql runs via
+        # docker-entrypoint only on first init, so a warm volume hides the fault.
+        #
+        # `--wait` is the whole point of this step. It fails the job if any
+        # container never reaches healthy, which is precisely what a schema that
+        # cannot initialise looks like.
+        run: docker compose up -d --build --wait --wait-timeout 300
+
+      - name: What is actually running
+        if: always()
+        run: docker compose ps
+
+      - name: Every service answers /healthz
+        run: |
+          set -e
+          for port in 8070 8071 8072 8073 8074 8075 8076 8077; do
+            printf "  :%s " "$port"
+            curl -fsS --retry 12 --retry-delay 5 --retry-connrefused \
+              "http://localhost:$port/healthz" > /dev/null && echo ok
+          done
+          curl -fsS --retry 12 --retry-delay 5 --retry-connrefused \
+            http://localhost:3070/login > /dev/null && echo "  portal ok"
+
+      - name: Seed, then prove the seed is reachable
+        run: |
+          make seed
+          # A login proves the schema loaded AND the users row exists. The FK that
+          # broke init lives on that table.
+          curl -fsS localhost:8070/login -H 'Content-Type: application/json' \
+            -d '{"username":"maria.gonzalez","password":"portal123"}' | head -c 120
+
+      - name: Integration tests
+        run: |
+          pip install -r requirements-dev.txt
+          pytest -m integration -q
+
+      - name: Browser journeys
+        # adr/0013 gated these behind `make up`, which was right when CI had no
+        # stack. It stops being right now that it does -- an opt-in journey suite
+        # is a suite that does not run, and #17 shipped claiming a journey passed
+        # when it had never once executed.
+        working-directory: frontend
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose logs --tail=120
+
   # NOTE: no dependency vulnerability scan, no container image scan, and no
   # secret-scanning step. Images are built and pushed straight from main.
   docker-build:
     runs-on: ubuntu-latest
-    needs: [frontend, services, tests]
+    needs: [frontend, services, tests, stack-smoke]
     steps:
       - uses: actions/checkout@v4
       - name: Build images
