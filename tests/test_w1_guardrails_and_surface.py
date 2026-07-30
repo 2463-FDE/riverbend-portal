@@ -247,3 +247,60 @@ def test_healthz_reports_retention_posture():
     body = client.get("/healthz").json()
     assert body["status"] == "ok"
     assert "retention" in body and "ok" in body["retention"]
+
+
+# --------------------------------------------------------------------------- #
+# 20b — the two id namespaces that meet at the retention probe
+#
+# The first live run failed here. Invocation uses a region-scoped INFERENCE
+# PROFILE id; the retention API knows only foundation-model ids. Passing the
+# profile id got "The provided model identifier is invalid", reported by the old
+# code as a bare `ValidationException` -- which read like a policy refusal rather
+# than a wrong-API bug, and cost a diagnosis.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("given,expected", [
+    ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5"),
+    ("eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "anthropic.claude-sonnet-4-5"),
+    ("apac.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5"),
+    # Already a retention-API id — unchanged.
+    ("anthropic.claude-fable-5", "anthropic.claude-fable-5"),
+    # Unprefixed foundation-model id — only the version suffix goes.
+    ("anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5"),
+])
+def test_retention_model_id_maps_a_profile_onto_a_model(given, expected):
+    assert retention.retention_model_id(given) == expected
+
+
+def test_retention_probe_failure_reports_why_not_just_the_type(monkeypatch):
+    """`ValidationException` on its own is true and useless.
+
+    The message never carries prompt text -- this call sends a model id and
+    nothing else -- so including it costs no PHI exposure and saves the next
+    person the hour this one cost.
+    """
+    monkeypatch.setattr(retention.settings, "use_stub", False)
+    monkeypatch.setattr(retention.settings, "require_zero_retention", True)
+
+    def boom(_model_id):
+        raise ValueError("The provided model identifier is invalid.")
+
+    status = retention.check("us.anthropic.claude-haiku-4-5-20251001-v1:0", probe=boom)
+    assert status.ok is False
+    assert "model identifier is invalid" in status.reason
+    assert "ValueError" in status.reason
+
+
+def test_retention_surfaces_an_unavailable_model(monkeypatch):
+    """Bedrock's own fail-closed, surfaced at startup rather than at the first
+    PHI request: a model whose allowed_modes excludes the account's effective
+    mode reports `status: unavailable`."""
+    monkeypatch.setattr(retention.settings, "use_stub", False)
+    monkeypatch.setattr(retention.settings, "require_zero_retention", True)
+
+    status = retention.check("anthropic.claude-fable-5", probe=lambda _m: {
+        "effective_mode": "default",
+        "allowed_modes": ["provider_data_share"],
+        "status": "unavailable",
+        "status_reason": "This model is not available under data retention mode 'default'.",
+    })
+    assert status.ok is False

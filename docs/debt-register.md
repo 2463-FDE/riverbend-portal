@@ -130,3 +130,40 @@ here rather than implied by silence. An unstated gap reads as a covered one.
 - **Caveat:** they still are not in the fast `frontend` job, so a pure-UI PR gets
   its component feedback in ~1 minute and its journey feedback with the stack job.
   That is a deliberate latency trade, not an exemption.
+
+## D-11 · Zero data retention is available but not configured — Open
+
+- **Source:** `docs/findings/w1-retention-preflight-called-the-wrong-api.md`
+- **Live posture, 2026-07-30:** account mode `inherit` → effective `default`.
+  `anthropic.claude-haiku-4-5` allows `['none', 'default', 'provider_data_share']`,
+  so ZDR is **available and not requested**.
+- **What `default` means:** AWS may retain prompts and completions for abuse
+  detection. The **model provider does not receive them**.
+- **What is missing:** one account-wide call, deliberately not made by us because
+  it affects every Bedrock workload in the account:
+
+  ```bash
+  curl -X PUT https://bedrock.$AWS_REGION.amazonaws.com/data-retention \
+    -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" -d '{"mode":"none"}'
+  ```
+
+- **Not to be oversold:** the live smoke tier ran with
+  `BEDROCK_REQUIRE_ZERO_RETENTION=false`, against synthetic seed patients, on the
+  client's instruction. It proves the model plumbing. **The ZDR control itself is
+  unproven end-to-end** and stays that way until the account is set to `none`.
+- **Before real PHI:** this and the AWS BAA, together. Neither is an engineering
+  problem; both are decisions.
+
+## D-12 · The only code that talks to AWS has no test — Open (partly closed)
+
+- **Source:** the same finding
+- **The pattern, now three-for-three:** `check()` takes an injectable probe so
+  tests run offline, and every test injected one — so `_default_probe`, the only
+  function that touched AWS, had zero coverage by construction. Same shape as the
+  corpus path that resolved only outside a container, the gateway route no test
+  posted through, and the sensitivity flag nothing in production ever set.
+- **What is closed:** the live tier (L0–L6) now exercises the real call path, and
+  L0 spends nothing so it can run on any credentialed check-in.
+- **What is open:** nothing runs the live tier automatically, because it costs
+  money. A nightly or pre-demo credentialed run is the obvious answer and has not
+  been set up.
