@@ -255,17 +255,20 @@
 <style>
   /* Demo slide — the deliberate stop. Inverted so it is impossible to walk past
      while reading from a script. */
-  /* Inverted relative to whatever the deck currently is, so it reads as a stop
-     in both themes rather than only in light. */
+  /* The demo slide is the deliberate stop. It was INVERTED, which read as a
+     stop against a light deck and, once the deck went dark, simply produced the
+     one white slide in the deck -- the exact thing that was reported.
+
+     So it stays dark like everything else and earns its distinction from the
+     accent instead: a teal hairline top and bottom, a slightly raised ground,
+     and the URL set large in the accent colour. Loud without being a flashbulb
+     in a dim room. */
   .demo {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--paper-2);
+    border-top: 2px solid var(--shipped);
+    border-bottom: 2px solid var(--shipped);
   }
-  .demo h1, .demo h2 { color: var(--paper); }
-  .demo p, .demo .lede { color: var(--paper-2); }
-  .demo .tab { color: var(--ink-3); border-color: var(--rule); }
-  .demo .tab b { color: var(--paper-2); }
-  .demo .beats .who { color: var(--shipped); }
+  .demo .tab b { color: var(--shipped); }
   .demo .url { color: var(--shipped); }
   .url {
     font-family: var(--data);
