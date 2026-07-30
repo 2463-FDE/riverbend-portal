@@ -145,18 +145,58 @@ def _stub_answer(question: str, chunks: list[Retrieved]) -> str:
             df[term] = df.get(term, 0) + 1
     total = len(sentences)
 
-    best, best_marker, best_score = "", 1, 0.0
+    scored: list[tuple[float, int, str]] = []
     for marker, sentence, terms in sentences:
         score = sum(
             math.log(1 + total / (1 + df.get(term, 0)))
             for term in (q_terms & terms)
         )
-        if score > best_score:
-            best, best_marker, best_score = sentence, marker, score
+        if score > 0:
+            scored.append((score, marker, sentence))
 
-    if not best:
+    if not scored:
         return json.dumps({"answer": REFUSAL})
-    return json.dumps({"answer": f"{best} [{best_marker}]"})
+
+    best_score = max(s for s, _m, _t in scored)
+
+    # Report EVERY sentence that matches as well as the best one, not just the
+    # first of them.
+    #
+    # This was `if score > best_score`, which keeps the first of any tie. Asked
+    # "what am I allergic to?" across Maria's three charts, "Allergies: none
+    # recorded." (chart 1042) and "Allergies: penicillin." (chart 1330) score
+    # IDENTICALLY -- both match on the single term `allergy` -- so the answer was
+    # decided by iteration order, and iteration order put the chart without the
+    # allergy first.
+    #
+    # The stub then said "Allergies: none recorded." while citing all three
+    # charts: not a refusal, a confidently wrong clinical answer, and the exact
+    # failure this engagement is about. It surfaced only once the stemmer fix let
+    # that question past the relevance gate at all.
+    #
+    # Ties are the interesting case, not a nuisance to break. Reporting all of
+    # them is what the real model does with the same context ("the records show
+    # conflicting information"), so dev and demo now behave like production
+    # instead of quietly disagreeing with it.
+    tied = [(m, t) for sc, m, t in scored if sc >= best_score - 1e-9]
+
+    seen: set[str] = set()
+    parts: list[str] = []
+    for marker, sentence in tied:
+        key = sentence.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(f"{sentence.strip()} [{marker}]")
+
+    if len(parts) == 1:
+        return json.dumps({"answer": parts[0]})
+
+    # More than one equally-good answer means the record disagrees with itself.
+    # Say so rather than picking a side.
+    return json.dumps({
+        "answer": "The records give more than one answer: " + " ".join(parts)
+    })
 
 
 # --------------------------------------------------------------------------- #

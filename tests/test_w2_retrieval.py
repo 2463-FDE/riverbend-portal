@@ -257,3 +257,54 @@ def test_only_the_adapter_imports_chromadb():
         f"{offenders} import chromadb directly. The adapter is the only module "
         f"allowed to — that is what keeps the pgvector fallback one file (ADR 0006)."
     )
+
+
+def test_the_stub_reports_every_tied_sentence_not_the_first(index):
+    """A tie between contradicting records decided the clinical answer.
+
+    Asked "what am I allergic to?" across Maria's three charts, two sentences
+    score IDENTICALLY -- "Allergies: none recorded." (1042) and "Allergies:
+    penicillin." (1330) both match on the single term `allergy`. The stub kept
+    the first of any tie, and iteration order put the chart WITHOUT the allergy
+    first.
+
+    So it answered "Allergies: none recorded." while citing all three charts:
+    not a refusal, a confidently wrong clinical answer, and the exact failure
+    this engagement is about. It only surfaced once the stemmer fix let that
+    question past the relevance gate at all -- before that it refused, which was
+    wrong but safe.
+
+    Ties are the interesting case, not a nuisance to break.
+    """
+    out = rag_graph.run(index, "what am I allergic to?", kind=KIND_RECORD,
+                        patient_scope=[1042, 1330, 1588])
+
+    assert not out.refused
+    assert "penicillin" in out.answer.lower(), (
+        f"the allergy is on chart 1330 and the answer does not mention it: {out.answer!r}"
+    )
+    # Both sides of the disagreement, not a pick.
+    assert "none recorded" in out.answer.lower()
+    assert "more than one answer" in out.answer.lower()
+
+
+def test_an_unambiguous_question_still_gets_one_sentence(index):
+    """The tie handling must not make every answer a list."""
+    out = rag_graph.run(index, "am I allergic to penicillin?", kind=KIND_RECORD,
+                        patient_scope=[1042, 1330, 1588])
+    assert "penicillin" in out.answer.lower()
+    assert "more than one answer" not in out.answer.lower()
+
+
+def test_the_stub_never_invents(index):
+    """Whatever it reports is a sentence from the retrieved context."""
+    out = rag_graph.run(index, "what medications am I taking?", kind=KIND_RECORD,
+                        patient_scope=[1042, 1330, 1588])
+    import re
+    body = re.sub(r"\[\d+\]", "", out.answer)
+    body = body.replace("The records give more than one answer:", "")
+    corpus_text = " ".join(
+        (c.get("text") if isinstance(c, dict) else c.text).lower()
+        for c in out.retrieved)
+    for sentence in [s.strip() for s in body.split(".") if len(s.strip()) > 8]:
+        assert sentence.lower() in corpus_text, f"stub invented: {sentence!r}"
