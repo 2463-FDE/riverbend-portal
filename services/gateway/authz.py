@@ -46,3 +46,37 @@ def require_ingest(session: dict) -> dict:
             detail="You do not have permission to add documents to the knowledge base.",
         )
     return session
+
+
+# --------------------------------------------------------------------------- #
+# W4 — releasing an assembled record view (adr/0015 rule 4, UI-D18, codex F8)
+# --------------------------------------------------------------------------- #
+def can_approve(session: dict) -> bool:
+    """May this session decide a queued release?
+
+    Separate from `can_ingest` on purpose. Ingest changes what the assistant
+    believes; approval discloses a specific patient's assembled record. Different
+    blast radius, different people, so a single "knowledge admin" capability
+    covering both would be the coarse-role mistake we are already documenting.
+
+    Role/username allowlists, same interim shape as ingest and for the same
+    reason (D7, W9): the inherited system has one role and cannot express a
+    capability. Defaults to the `staff` role because a clinic with nobody able to
+    approve has a queue that only grows -- and a control that blocks all work gets
+    switched off rather than used.
+    """
+    username = (session or {}).get("username", "")
+    role = (session or {}).get("role", "")
+    return (
+        (username and username in settings.approval_users)
+        or (role and role in settings.approval_roles)
+    )
+
+
+def require_approve(session: dict) -> dict:
+    if not can_approve(session):
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to release record views.",
+        )
+    return session

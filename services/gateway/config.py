@@ -35,6 +35,17 @@ class Settings:
         if r.strip()
     )
 
+    # W4 — approving a queued record release (authz.can_approve). Separate from
+    # ingest: different blast radius, different people. Defaults to `staff`
+    # because a clinic where nobody can approve has a queue that only grows, and
+    # a control that blocks all work gets switched off rather than used.
+    approval_users = frozenset(
+        u.strip() for u in os.getenv("APPROVAL_USERS", "").split(",") if u.strip()
+    )
+    approval_roles = frozenset(
+        r.strip() for r in os.getenv("APPROVAL_ROLES", "staff").split(",") if r.strip()
+    )
+
     @property
     def db_url(self) -> str:
         return (

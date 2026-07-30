@@ -20,7 +20,7 @@ function mockFetch(handlers: Record<string, { ok: boolean; status: number; body:
 }
 
 beforeEach(() => {
-  window.localStorage.setItem("rb.token", "test-token");
+  window.localStorage.setItem("riverbend.token", "test-token");
 });
 
 afterEach(() => {

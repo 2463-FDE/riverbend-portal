@@ -1,16 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiFetch, getUser } from "./session";
+import { SESSION_EVENT, apiFetch, getToken, getUser } from "./session";
 
 /**
  * Who is using the portal — ADR 0012.
  *
- * This hook decides exactly four things and nothing else:
+ * This hook decides exactly five things and nothing else:
  *   1. which nav items render
  *   2. what the landing page shows
  *   3. whether a patient picker appears
  *   4. whether the knowledge-ingest control is visible
+ *   5. whether the approvals queue is offered (W4, UI-D18)
+ *
+ * `canApprove` is deliberately a SEPARATE flag from `canIngest`, mirroring the
+ * gateway. Ingest changes what the assistant believes; approval discloses one
+ * patient's assembled record. Collapsing them into one "admin" boolean is the
+ * coarse-role mistake the engagement is already documenting.
  *
  * It has NO authority. The gateway re-derives the scope server-side on every
  * request, so a wrong answer here shows the wrong navigation — it cannot grant
@@ -24,8 +30,8 @@ import { apiFetch, getUser } from "./session";
  */
 
 export type Principal =
-  | { kind: "patient"; patientId: number | null; canIngest: boolean }
-  | { kind: "staff"; patientId: null; canIngest: boolean };
+  | { kind: "patient"; patientId: number | null; canIngest: boolean; canApprove: boolean }
+  | { kind: "staff"; patientId: null; canIngest: boolean; canApprove: boolean };
 
 export type PrincipalState =
   | { status: "loading"; principal: null }
@@ -42,7 +48,8 @@ export type PrincipalState =
  */
 export function resolvePrincipal(
   rawPatientId: unknown,
-  canIngest = false
+  canIngest = false,
+  canApprove = false
 ): Principal {
   const absent =
     rawPatientId === null ||
@@ -50,7 +57,7 @@ export function resolvePrincipal(
     rawPatientId === "" ||
     rawPatientId === "None";
 
-  if (absent) return { kind: "staff", patientId: null, canIngest };
+  if (absent) return { kind: "staff", patientId: null, canIngest, canApprove };
 
   // Only a number or a numeric string is a candidate. JS coercion is too eager
   // to trust here: `Number(true)` is 1 and `Number([])` is 0, so a session
@@ -66,15 +73,15 @@ export function resolvePrincipal(
     (typeof rawPatientId === "string" && /^\d+$/.test(rawPatientId.trim()));
 
   if (!isCandidate) {
-    return { kind: "patient", patientId: null, canIngest };
+    return { kind: "patient", patientId: null, canIngest, canApprove };
   }
 
   const parsed = Number(rawPatientId);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     // Malformed: a patient who can see nothing. NOT staff.
-    return { kind: "patient", patientId: null, canIngest };
+    return { kind: "patient", patientId: null, canIngest, canApprove };
   }
-  return { kind: "patient", patientId: parsed, canIngest };
+  return { kind: "patient", patientId: parsed, canIngest, canApprove };
 }
 
 /**
@@ -89,8 +96,29 @@ export function usePrincipal(): PrincipalState {
     principal: null,
   });
 
+  // Bumped on login and logout so the effect below re-runs. Without this the
+  // hook resolves once, on the login page, where there is no session -- and a
+  // mount-only resolution in a root-layout component never revisits it. That
+  // defect shipped: it showed a patient the staff menu.
+  const [sessionTick, setSessionTick] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setSessionTick((n) => n + 1);
+    window.addEventListener(SESSION_EVENT, bump);
+    return () => window.removeEventListener(SESSION_EVENT, bump);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
+
+    // No token means no session to resolve. Returning to `loading` rather than
+    // falling through to a default matters: `resolvePrincipal(null)` is STAFF,
+    // mirroring the gateway where an absent patient_id IS staff, and defaulting
+    // to it before login would show the staff menu to whoever logs in next.
+    if (!getToken()) {
+      setState({ status: "loading", principal: null });
+      return;
+    }
 
     // Optimistic first paint from the stored login response, then reconciled
     // against /me. The stored copy can be stale; /me is authoritative for what
@@ -99,7 +127,7 @@ export function usePrincipal(): PrincipalState {
     if (stored) {
       setState({
         status: "ready",
-        principal: resolvePrincipal(stored.patient_id, false),
+        principal: resolvePrincipal(stored.patient_id, false, false),
       });
     }
 
@@ -109,7 +137,11 @@ export function usePrincipal(): PrincipalState {
         if (cancelled || !me) return;
         setState({
           status: "ready",
-          principal: resolvePrincipal(me.patient_id, Boolean(me.can_ingest)),
+          principal: resolvePrincipal(
+            me.patient_id,
+            Boolean(me.can_ingest),
+            Boolean(me.can_approve)
+          ),
         });
       })
       .catch(() => {
@@ -122,7 +154,7 @@ export function usePrincipal(): PrincipalState {
           setState((s) =>
             s.status === "ready"
               ? s
-              : { status: "ready", principal: resolvePrincipal(null, false) }
+              : { status: "ready", principal: resolvePrincipal(null, false, false) }
           );
         }
       });
@@ -130,7 +162,7 @@ export function usePrincipal(): PrincipalState {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionTick]);
 
   return state;
 }

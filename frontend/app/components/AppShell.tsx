@@ -12,11 +12,13 @@ import {
   IconRoi,
   IconKnowledge,
   IconCoverage,
+  IconApprovals,
   IconMessages,
   IconBilling,
   IconBell,
 } from "./icons";
 import { clearSession, getUser, getToken, apiFetch } from "../lib/session";
+import { usePrincipal } from "../lib/principal";
 import type { PortalUser } from "../lib/types";
 
 interface NavItem {
@@ -24,17 +26,51 @@ interface NavItem {
   label: string;
   icon: ReactNode;
   soon?: boolean;
+  /** Staff-only. Patients never see these (adr/0012, RVB-W4-U1). */
+  staffOnly?: boolean;
+  /** Requires the approval capability from /me. */
+  needsApprove?: boolean;
 }
 
+/**
+ * One shell, filtered by principal — NOT two apps (UI-D2).
+ *
+ * `staffOnly` is a NAVIGATION decision and nothing more. Every route it hides is
+ * independently enforced at the gateway, which re-derives the scope server-side
+ * on every request. A wrong answer here shows the wrong menu; it cannot grant
+ * access. That asymmetry is what lets this stay a filter rather than a second
+ * layout, and it is why the filter is allowed to be optimistic while the gateway
+ * is not.
+ *
+ * Intake and ROI are staff workflows *about* patients — a patient seeing "Release
+ * of Information" in their own sidebar would reasonably read it as a thing they
+ * can do for themselves, which it is not.
+ */
 const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: <IconDashboard className="rb-nav__icon" /> },
   { href: "/appointments", label: "Appointments", icon: <IconCalendar className="rb-nav__icon" /> },
   { href: "/records", label: "Records", icon: <IconRecords className="rb-nav__icon" /> },
   { href: "/knowledge", label: "Knowledge", icon: <IconKnowledge className="rb-nav__icon" /> },
-  { href: "/eligibility", label: "Eligibility", icon: <IconCoverage className="rb-nav__icon" /> },
-  { href: "/intake", label: "Intake", icon: <IconIntake className="rb-nav__icon" /> },
-  { href: "/roi", label: "Release of Information", icon: <IconRoi className="rb-nav__icon" /> },
+  { href: "/eligibility", label: "Eligibility", icon: <IconCoverage className="rb-nav__icon" />, staffOnly: true },
+  { href: "/intake", label: "Intake", icon: <IconIntake className="rb-nav__icon" />, staffOnly: true },
+  { href: "/roi", label: "Release of Information", icon: <IconRoi className="rb-nav__icon" />, staffOnly: true },
+  { href: "/approvals", label: "Approvals", icon: <IconApprovals className="rb-nav__icon" />, staffOnly: true, needsApprove: true },
 ];
+
+export function visibleNav(
+  items: NavItem[],
+  principal: { kind: "patient" | "staff"; canApprove?: boolean } | null
+): NavItem[] {
+  // Until the principal resolves, show the SAFE subset rather than the full menu.
+  // Flashing Intake and ROI at a patient for one paint and then removing them is
+  // both a worse experience and a worse signal than showing less and adding to it.
+  const kind = principal?.kind ?? "patient";
+  return items.filter((item) => {
+    if (item.staffOnly && kind !== "staff") return false;
+    if (item.needsApprove && !principal?.canApprove) return false;
+    return true;
+  });
+}
 
 const NAV_SOON: NavItem[] = [
   { href: "#", label: "Messages", icon: <IconMessages className="rb-nav__icon" />, soon: true },
@@ -75,6 +111,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [user, setUser] = useState<PortalUser | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { principal } = usePrincipal();
+  const nav = visibleNav(NAV, principal);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const isLogin = pathname === "/login";
@@ -115,7 +153,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   if (isLogin) return <>{children}</>;
 
   const pageTitle =
-    NAV.find((n) => isActive(pathname, n.href))?.label ?? "Patient Portal";
+    nav.find((n) => isActive(pathname, n.href))?.label ?? "Patient Portal";
 
   return (
     <div className="rb-shell">
@@ -133,7 +171,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="rb-nav" aria-label="Primary">
-          {NAV.map((item) => {
+          {nav.map((item) => {
             const active = isActive(pathname, item.href);
             return (
               <Link
