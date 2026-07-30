@@ -1188,3 +1188,185 @@ approved (UI-D20), and which internal state is worth surfacing at all (UI-D17).
 All three were latent from the moment `#16` gave patients sessions, and none were
 caught by tests that were individually correct.
 
+
+---
+
+# Part V — the thresholds were measuring the stub
+
+**Date:** 2026-07-30, after the first live credential
+**Trigger:** the client, using the portal as `maria.gonzalez`, could not get the
+assistant to tell her about her own penicillin allergy.
+
+Three defects, one root cause, and a guardrail that has to be redesigned rather
+than retuned.
+
+---
+
+## UI-D21 — A config value that fails silently
+
+**SE:** Smallest one first because it is not arguable. `RAG_EMBED_BACKEND=bedrock`
+does nothing:
+
+```python
+if settings.embed_backend == "titan" and not settings.use_stub:
+```
+
+Anything that is not the literal string `titan` falls through to the offline
+hashed bag-of-terms. No warning, no log line. I set `bedrock` — a name the AWS
+docs use everywhere — and got identical retrieval scores to four decimal places,
+which is the only reason I noticed.
+
+**PE:** Is there an argument for the fallback? Degrading to something that works
+rather than refusing to boot?
+
+**SE:** There would be if the fallback were equivalent. It is not: one is a
+semantic embedder and the other is lexical overlap, and the difference is whether
+"what am I allergic to?" retrieves anything at all. Silently swapping a
+production component for a dev stub on a typo is how you demo a system that is
+not the system.
+
+> **DECISION UI-D21.** An unrecognised `RAG_EMBED_BACKEND` **raises at startup**
+> and names the accepted values. `offline` stays available and must be chosen
+> explicitly. **Rejected:** silent fallback — the two backends are not
+> interchangeable, and the one you get by accident is the weaker one.
+
+---
+
+## UI-D22 — Two floors set above the entire range of legitimate output
+
+**PE:** The client's question refuses. Walk me through why.
+
+**SE:** Six realistic patient questions, measured against real Titan embeddings
+and the real model:
+
+| Query | coverage | dense | grounding | invented claims |
+|---|---|---|---|---|
+| what am I allergic to? | 0.00 | 0.332 | 0.521 | none |
+| do I have any drug allergies? | 0.33 | 0.292 | 0.176 | none |
+| am I allergic to penicillin? | 0.33 | 0.483 | 0.342 | none |
+| what medications am I taking? | 0.33 | 0.328 | 0.353 | none |
+| when was my last visit? | 0.50 | 0.259 | 0.429 | none |
+| what were my lab results? | 0.50 | 0.389 | 0.462 | none |
+| **configured floor** | **0.30** | **0.55** | **0.55** | |
+
+Dense tops out at 0.483 against a 0.55 floor. Grounding tops out at 0.521 against
+a 0.55 threshold. **Every legitimate answer fails both.**
+
+**PE:** So they were never calibrated.
+
+**SE:** They were calibrated — against the stub. And that is the part worth
+writing down, because it looked like diligence at the time.
+
+The stub answers by selecting a sentence from the retrieved context and echoing
+it. An echo scores ~1.0 on a term-overlap grounding check **by construction**. The
+lexical retriever scored well on exact-token queries because the gold-set queries
+were written with exact tokens in them. Every number looked comfortable, and
+every number was measuring a component we do not ship.
+
+**PE:** Which is the same shape as the retention probe and the corpus path.
+
+**SE:** The same shape a fourth time. The thing that makes development hermetic —
+the stub, the injected probe, the repo-root path — is the thing that hides
+whether the real component behaves. I would like to stop treating that as bad
+luck.
+
+> **DECISION UI-D22.** `RAG_MIN_SEMANTIC_SCORE` **0.55 → 0.20**, below the
+> observed minimum (0.259) with margin, so a paraphrase fallback actually falls
+> back. The floor is documented with the distribution it was derived from, and
+> `docs/runbook.md` says to re-measure when the embedding model changes — a
+> threshold with no recorded provenance is the thing being fixed here.
+> **Rejected:** tuning until the demo passes. The number comes from a measured
+> range or it is the same mistake again.
+
+---
+
+## UI-D23 — Grounding by term overlap is not a grounding check
+
+**PE:** Lower the grounding threshold too and we are done.
+
+**SE:** No. That one is not miscalibrated, it is measuring the wrong thing, and
+lowering it would let real hallucinations through to buy back false refusals.
+
+`grounding_score` is the fraction of the **output's** content terms that appear in
+the source. So an answer is penalised for the words it adds — and the words a
+good answer adds are "conflicting", "clarify", "healthcare provider", "you
+should". It scores *hedging* as *hallucination*. The safest possible output is
+the one it punishes hardest.
+
+**PE:** That is an argument for a better metric, not for removing a guardrail.
+What replaces it?
+
+**SE:** `invented_clinical_claims`, which already exists in the same file, is
+already called, and does the semantically correct thing: it looks for invented
+dosages, medications not in the source, and unsupported clinical directives.
+
+Adversarial cases against the same context:
+
+| Case | overlap | invented_clinical_claims |
+|---|---|---|
+| faithful, hedged synthesis | 0.643 | clean |
+| faithful, terse | 1.000 | clean |
+| invented drug (amoxicillin) | 0.400 | **flagged** |
+| invented dosage (metformin 500 mg) | 0.125 | **flagged** |
+| unsupported clinical directive | 0.429 | **flagged** |
+| **contradicts the source outright** | **0.500** | **flagged** |
+
+Six for six. Now put that beside the real-model numbers: faithful answers scored
+0.176 to 0.521 on overlap, and the **dangerous contradiction scored 0.500**.
+
+**PE:** The distributions overlap.
+
+**SE:** Completely. There is no threshold anywhere between 0.176 and 0.643 that
+passes faithful answers and blocks hallucinations, because overlap does not
+measure faithfulness. It measures *paraphrase distance*. A confident lie built
+from source vocabulary scores well; an honest hedge scores badly.
+
+**PE:** Then I want two things before I agree to demote it. It does not
+disappear, and something still catches the case where the model answers about
+something else entirely.
+
+**SE:** Agreed on both. Overlap stays computed and stays in the response and the
+logs as a **signal** — it is genuinely useful for spotting drift across a corpus,
+and throwing away a measurement because it is a bad gate is overcorrecting. And a
+very low overlap does mean something: an answer sharing almost no vocabulary with
+its own sources is off-topic even if it invents no drug. So a **floor stays, set
+far below the legitimate range** — a backstop, not the gate.
+
+**PE:** And the client hears which sentence?
+
+**SE:** That the check which decides whether an answer is released now looks for
+invented clinical content rather than for word reuse, that it catches every case
+the old one caught plus the ones it missed, and that the old number is still
+reported so nothing is lost. Not "we lowered a safety threshold".
+
+> **DECISION UI-D23.** `invented_clinical_claims` becomes the **release gate** for
+> RAG answers. Term overlap is **demoted to a signal**: still computed, still
+> returned, still logged, with a backstop floor at **0.15** — below the observed
+> legitimate minimum of 0.176, catching only answers essentially unrelated to
+> their sources.
+> **Rejected:** lowering the overlap threshold and keeping it as the gate. It
+> cannot separate the two populations at any value, so a "tuned" threshold is a
+> guess wearing a number.
+> **Rejected:** removing overlap entirely — it is a useful drift signal and the
+> only cheap one available.
+> **Precondition, met:** the replacement was proven on adversarial cases *before*
+> the demotion, not after. Six for six, including the contradiction case, which is
+> the one that matters clinically.
+
+---
+
+## What Part V changes about how we set numbers
+
+Every threshold in this system was chosen before there was anything real to
+measure, and three of the four were wrong once something real arrived. The
+correction is procedural, not arithmetic:
+
+**A threshold ships with the distribution it was derived from, or it does not
+ship.** `RAG_MIN_SEMANTIC_SCORE = 0.20` is defensible because six measured
+queries sit between 0.259 and 0.483. `0.55` was indefensible not because it was
+too high but because nobody could say where it came from.
+
+And the stub earns a standing caveat. It is not a neutral stand-in: it echoes its
+source, so it passes overlap checks by construction and makes any metric built on
+overlap look calibrated. Any threshold validated only in stub mode is unvalidated.
+
