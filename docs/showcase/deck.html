@@ -283,6 +283,43 @@
           align-items: baseline; }
   .next .w { font-family: var(--data); font-size: 0.76rem; color: var(--ink-3);
              white-space: nowrap; }
+
+  /* Under-the-hood diagram (slide 8). Hand-authored inline SVG rather than an
+     exported PNG: it follows the deck's theme toggle instead of sitting there as
+     a light rectangle on a dark slide, and the type stays real text so it holds
+     up when projected. */
+  .flow { width: 100%; height: auto; overflow: visible; display: block; }
+  .flow text { font-family: var(--body); fill: var(--ink); }
+  .flow .lbl { font-size: 13px; font-weight: 600; }
+  .flow .sub { font-size: 10.5px; fill: var(--ink-3); font-family: var(--data); }
+  .flow .edge { stroke: var(--ink-3); stroke-width: 1.5; fill: none; }
+  .flow .edge-lbl { font-size: 10px; fill: var(--ink-3); font-family: var(--data); }
+  .flow .box { fill: var(--paper-2); stroke: var(--rule); stroke-width: 1.5; }
+  .flow .gate { fill: var(--amber-bg); stroke: var(--amber); stroke-width: 2.5; }
+  .flow .gate-t { fill: var(--amber); font-weight: 700; }
+  .flow .human { fill: var(--shipped-bg); stroke: var(--shipped); stroke-width: 2.5; }
+  .flow .human-t { fill: var(--shipped); font-weight: 700; }
+  .flow .stop { fill: var(--alert-bg); stroke: var(--alert); stroke-width: 2; }
+  .flow .stop-t { fill: var(--alert); font-weight: 700; }
+  .flow .model { fill: var(--paper-2); stroke: var(--ink-2); stroke-width: 2;
+                 stroke-dasharray: 4 3; }
+  .flow marker path { fill: var(--ink-3); stroke: none; }
+
+  .flow-key { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.78rem;
+              color: var(--ink-3); font-family: var(--data); margin: 0.6rem 0 0; }
+  .flow-key i { font-style: normal; white-space: nowrap; }
+  .flow-key .sw { display: inline-block; width: 0.7rem; height: 0.7rem;
+                  border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
+
+  #rb-theme {
+    position: fixed; right: 1rem; bottom: 1rem; z-index: 10;
+    width: 2.4rem; height: 2.4rem; border-radius: 50%;
+    border: 1px solid var(--rule); background: var(--paper-2); color: var(--ink-2);
+    font-size: 1rem; line-height: 1; cursor: pointer;
+    opacity: 0.55; transition: opacity 0.15s ease;
+  }
+  #rb-theme:hover, #rb-theme:focus-visible { opacity: 1; }
+  @media print { #rb-theme { display: none; } }
 </style>
 
 </head>
@@ -419,7 +456,108 @@
   on the clinic&rsquo;s own handover data.</p>
 </section>
 
-<!-- 8 · status ------------------------------------------------------------- -->
+
+<!-- 8 · under the hood ----------------------------------------------------- -->
+<section class="slide wide">
+  <p class="tab"><span>Under the hood</span></p>
+  <h2>What just happened, as a diagram.</h2>
+  <p class="lede">The assembled record you saw. Three checks, and the model runs last.</p>
+
+  <svg class="flow" viewBox="0 0 1180 500" role="img"
+       aria-label="Request flow: authorize first with no model, then retrieval of four sections in parallel inside the approved scope, then a merge, then a human release decision that neither the subject nor the requester may make, then the single model call, then a grounding check, then release. A denied request returns 404 with no retriever run.">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+              markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z"/>
+      </marker>
+    </defs>
+
+    <!-- request -->
+    <rect class="box" x="0" y="150" width="128" height="54" rx="6"/>
+    <text class="lbl" x="64" y="172" text-anchor="middle">Request</text>
+    <text class="sub" x="64" y="190" text-anchor="middle">who + which chart</text>
+    <path class="edge" d="M128 177 H 166" marker-end="url(#a)"/>
+
+    <!-- authorize -->
+    <rect class="gate" x="166" y="140" width="154" height="74" rx="6"/>
+    <text class="lbl gate-t" x="243" y="166" text-anchor="middle">AUTHORIZE</text>
+    <text class="sub" x="243" y="184" text-anchor="middle">deterministic</text>
+    <text class="sub" x="243" y="198" text-anchor="middle">no model involved</text>
+
+    <!-- denied branch: drops well clear of the retrieval lanes -->
+    <path class="edge" d="M243 214 V 400 H 300" marker-end="url(#a)"/>
+    <text class="edge-lbl" x="252" y="300">denied</text>
+    <rect class="stop" x="300" y="372" width="300" height="56" rx="6"/>
+    <text class="lbl stop-t" x="450" y="394" text-anchor="middle">404 &#183; identical to &quot;no such chart&quot;</text>
+    <text class="sub" x="450" y="412" text-anchor="middle">zero records loaded &#183; no retriever ever runs</text>
+
+    <!-- allowed -> four lanes -->
+    <path class="edge" d="M320 177 H 400" marker-end="url(#a)"/>
+    <text class="edge-lbl" x="330" y="169">allowed</text>
+    <text class="sub" x="478" y="66" text-anchor="middle">in parallel, inside the approved scope</text>
+    <rect class="box" x="400" y="80" width="156" height="34" rx="5"/>
+    <text class="lbl" x="478" y="102" text-anchor="middle">demographics</text>
+    <rect class="box" x="400" y="126" width="156" height="34" rx="5"/>
+    <text class="lbl" x="478" y="148" text-anchor="middle">encounters</text>
+    <rect class="box" x="400" y="172" width="156" height="34" rx="5"/>
+    <text class="lbl" x="478" y="194" text-anchor="middle">labs</text>
+    <rect class="box" x="400" y="218" width="156" height="34" rx="5"/>
+    <text class="lbl" x="478" y="240" text-anchor="middle">coverage</text>
+
+    <path class="edge" d="M556 97 H 592 V 166"/>
+    <path class="edge" d="M556 143 H 592"/>
+    <path class="edge" d="M556 189 H 592"/>
+    <path class="edge" d="M556 235 H 592 V 188"/>
+    <path class="edge" d="M592 177 H 626" marker-end="url(#a)"/>
+
+    <!-- merge -->
+    <rect class="box" x="626" y="146" width="150" height="62" rx="6"/>
+    <text class="lbl" x="701" y="170" text-anchor="middle">merge</text>
+    <text class="sub" x="701" y="188" text-anchor="middle">one section can</text>
+    <text class="sub" x="701" y="200" text-anchor="middle">fail on its own</text>
+    <path class="edge" d="M776 177 H 812" marker-end="url(#a)"/>
+
+    <!-- human decision -->
+    <rect class="human" x="812" y="126" width="182" height="102" rx="6"/>
+    <text class="lbl human-t" x="903" y="150" text-anchor="middle">RELEASE DECISION</text>
+    <text class="sub" x="903" y="170" text-anchor="middle">a merged record, pulled</text>
+    <text class="sub" x="903" y="182" text-anchor="middle">by staff, pauses here</text>
+    <text class="sub" x="903" y="202" text-anchor="middle">not the subject,</text>
+    <text class="sub" x="903" y="214" text-anchor="middle">not the requester</text>
+    <path class="edge" d="M994 177 H 1030" marker-end="url(#a)"/>
+
+    <!-- model -->
+    <rect class="model" x="1030" y="140" width="150" height="74" rx="6"/>
+    <text class="lbl" x="1105" y="164" text-anchor="middle">synthesize</text>
+    <text class="sub" x="1105" y="182" text-anchor="middle">the ONLY model call</text>
+    <text class="sub" x="1105" y="196" text-anchor="middle">sees approved</text>
+    <text class="sub" x="1105" y="208" text-anchor="middle">material only</text>
+
+    <!-- grounding -->
+    <path class="edge" d="M1105 214 V 256" marker-end="url(#a)"/>
+    <rect class="gate" x="1006" y="256" width="174" height="62" rx="6"/>
+    <text class="lbl gate-t" x="1093" y="279" text-anchor="middle">GROUNDING CHECK</text>
+    <text class="sub" x="1093" y="297" text-anchor="middle">unsupported claim</text>
+    <text class="sub" x="1093" y="309" text-anchor="middle">&#8594; withheld, not softened</text>
+
+    <path class="edge" d="M1093 318 V 356" marker-end="url(#a)"/>
+    <rect class="box" x="1006" y="356" width="174" height="40" rx="6"/>
+    <text class="lbl" x="1093" y="381" text-anchor="middle">Released</text>
+  </svg>
+
+  <div class="flow-key">
+    <i><span class="sw" style="background:var(--amber)"></span>deterministic gate</i>
+    <i><span class="sw" style="background:var(--shipped)"></span>human decision</i>
+    <i><span class="sw" style="background:var(--alert)"></span>refusal</i>
+    <i><span class="sw" style="background:var(--ink-2)"></span>model call</i>
+  </div>
+
+  <p class="say"><b>The shape</b>Authorization is first and involves no model.
+  The model is last, and only ever sees material a person is already entitled to.
+  Between them sits a decision no single person can make alone.</p>
+</section>
+
+<!-- 9 · status ------------------------------------------------------------- -->
 <section class="slide">
   <p class="tab"><span>Where things stand</span></p>
   <h2>What&rsquo;s fixed, what&rsquo;s named, what&rsquo;s still open.</h2>
@@ -437,7 +575,7 @@
   would rather list them than let this week&rsquo;s work sound larger than it is.</p>
 </section>
 
-<!-- 9 · what's next -------------------------------------------------------- -->
+<!-- 10 · what's next -------------------------------------------------------- -->
 <section class="slide">
   <p class="tab"><span>Next</span></p>
   <h2>What we would do from here.</h2>
@@ -456,7 +594,7 @@
   clinical safety, so they go first.</p>
 </section>
 
-<!-- 10 · asks -------------------------------------------------------------- -->
+<!-- 11 · asks -------------------------------------------------------------- -->
 <section class="slide">
   <p class="tab"><span>What we need from you</span></p>
   <h2>Three things, and only one is engineering.</h2>

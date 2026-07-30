@@ -38,3 +38,20 @@ is itself a finding.
 **The single slide that lands hardest** is the three-charts table: same Social
 Security number, same address, same phone, and the penicillin allergy on only one
 of them. Let it sit on screen before talking.
+
+## A note on the exported diagrams
+
+`agentic-architecture.{svg,png}` and `patient-view-flow.{svg,png}` are exports of
+the `.mmd` sources beside them, and they are **stale relative to the `.mmd`**.
+Two corrections landed in the source after the last export:
+
+- the architecture diagram claimed *"AWS Bedrock — data retention: none"*. That
+  is false. Measured 2026-07-30: the account is `inherit`, resolving to
+  `default`. Zero data retention is **available and not enabled** — see
+  `docs/debt-register.md` D-11.
+- the patient-view diagram said "a human approves"; it is now specific that
+  neither the subject nor the requester may be that person.
+
+Re-export before using them anywhere client-facing. The deck does **not** depend
+on them — slide 8 carries its own inline SVG, which follows the deck's theme and
+is generated from nothing.

@@ -10,6 +10,8 @@ graph LR
     AO --> W4["W4 — Patient view<br/>parallel assembly"]
 
     W2 --> CH[("ChromaDB")]
+    AO --> ING["Knowledge ingest<br/>stage → human preview → commit<br/>nothing indexed until a person looks"]
+    ING --> CH
     CH --> CK["riverbend_knowledge<br/>clinic policy · open to staff"]
     CH --> CR["riverbend_records<br/>PHI · patient-scoped only"]
 
@@ -25,7 +27,7 @@ graph LR
     D3 --> SY
     D4 --> SY
 
-    W1 --> BR["AWS Bedrock<br/>data retention: none"]
+    W1 --> BR["AWS Bedrock<br/>retention: account default<br/>ZDR available, not enabled"]
     W2 --> BR
     W3 --> BR
     SY --> BR

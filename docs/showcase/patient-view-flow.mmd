@@ -14,7 +14,7 @@ graph TD
     R4 --> MERGE
 
     MERGE --> Q2{"Disclosure-shaped<br/>request?"}
-    Q2 -->|"YES"| HUMAN["PAUSE — a human approves<br/>nothing is released meanwhile"]
+    Q2 -->|"YES"| HUMAN["PAUSE — a person releases it<br/>not the subject, not the requester<br/>nothing is disclosed meanwhile"]
     HUMAN --> SYN
     Q2 -->|"NO"| SYN["synthesize<br/>the ONLY model call<br/>sees approved material only"]
     SYN --> REL(["Release to the patient"])

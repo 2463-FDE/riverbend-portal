@@ -229,6 +229,24 @@ docker compose start eligibility-service
 > register anyone. Registration no longer waits on a third party — and notice the
 > screen says what to do, not just what happened."*
 
+### After the demo — the diagram *(~2 min)*
+
+Slide 8 exists for the question people ask the moment the clicking stops: *how
+does it actually work?*
+
+Walk it left to right and say three things:
+
+1. **Authorization is first, and no model is involved in it.** The check runs
+   before anything is fetched, so an unauthorised chart is never loaded, not
+   loaded-then-hidden.
+2. **The model is last, and only sees material a person is already entitled to.**
+   It cannot widen access; it receives a scope and works inside it.
+3. **Between them sits a decision no single person can make alone** — not the
+   patient it concerns, not the staff member who asked for it.
+
+If someone asks why the assembly fans out into four boxes: so one section failing
+does not fail the record. You saw that on A1 if any domain was unavailable.
+
 ---
 
 ## B. The scripted fallback
