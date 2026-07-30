@@ -201,10 +201,22 @@ def build_graph(index, client: Optional[model_client.ModelClient] = None):
         }
 
     def route_relevance(state: RagState) -> str:
+        """Term coverage is the gate; dense similarity is the paraphrase fallback.
+
+        The fallback only applies where the dense score MEANS something. Measured,
+        the offline embedder does not separate relevant from irrelevant queries
+        (relevant 0.107-0.427, irrelevant 0.049-0.295), so enabling it there
+        would admit "how do I bake sourdough bread" on noise. Under Titan the
+        populations separate cleanly (0.328-0.706 vs 0.047-0.170) and the
+        fallback is what lets "what am I allergic to?" through despite sharing no
+        vocabulary with the chart. See `settings.semantic_fallback_enabled`.
+        """
         if not state.get("retrieved"):
             return "refuse"
-        if (state.get("relevance", 0.0) >= settings.min_term_coverage
-                or state.get("top_similarity", 0.0) >= settings.min_semantic_score):
+        if state.get("relevance", 0.0) >= settings.min_term_coverage:
+            return "generate"
+        if (settings.semantic_fallback_enabled
+                and state.get("top_similarity", 0.0) >= settings.min_semantic_score):
             return "generate"
         return "refuse"
 
@@ -245,11 +257,37 @@ def build_graph(index, client: Optional[model_client.ModelClient] = None):
 
         This runs AFTER generation on purpose: it is the only point at which we
         can compare what the model said against what we actually gave it.
+
+        **This gate is deliberately UNCHANGED, and that is a finding.**
+
+        It refuses answers that are correct. Measured live, faithful answers to
+        the client's own questions score 0.481-0.600 on overlap, so roughly three
+        in four are withheld -- which is the defect the client reported.
+
+        Three replacements were built, measured and rejected (ADR 0016, revised):
+
+          * lowering the threshold -- an answer that flatly CONTRADICTS the record
+            ("you have no known drug allergies") scores 0.500, inside the faithful
+            range. No value separates the populations;
+          * `invented_clinical_claims` alone -- codex:rescue F1 showed it releases
+            six fabrications the overlap gate blocked, including "You are
+            pregnant" and "Your blood pressure was 160/100";
+          * requiring every clinical term to be supported -- blocks all six, and
+            also refuses every real answer, because model prose always contains
+            words the record does not.
+
+        So it stays strict and it stays wrong in the safe direction. Fixing this
+        properly needs sentence-level entailment against the source, which is
+        model work rather than a threshold. Tracked as D-14.
+
+        `clinical_support` and `unsupported_clinical_terms` ship measured and
+        unused for that work to build on.
         """
         if state.get("reason", "").startswith("generation_failed"):
             return {"grounded": False, "path": ["ground_gate"]}
         context = format_context(state["retrieved"])
-        verdict = guardrails.check(state["answer"], context, settings.grounding_threshold)
+        verdict = guardrails.check(state["answer"], context,
+                                   settings.grounding_threshold, strict_terms=False)
         return {
             "grounded": verdict.grounded,
             "reason": "|".join(verdict.reasons) if verdict.reasons else "",

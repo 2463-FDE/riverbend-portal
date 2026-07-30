@@ -167,3 +167,35 @@ here rather than implied by silence. An unstated gap reads as a covered one.
 - **What is open:** nothing runs the live tier automatically, because it costs
   money. A nightly or pre-demo credentialed run is the obvious answer and has not
   been set up.
+
+## D-13 · `invented_clinical_claims` is pattern-based — Open
+
+- **Source:** `codex:rescue` F1, `adr/0016` §4
+- **What it catches:** invented medications (curated list), invented dosages
+  (regex), unsupported clinical directives (frame match).
+- **What it misses, demonstrated:** invented conditions ("You are pregnant"),
+  invented vitals ("blood pressure was 160/100"), invented labs ("elevated A1C"),
+  invented severity ("anaphylactic reaction"), invented causation ("caused by
+  strep throat"), and status changes ("your allergy has resolved").
+- **Why it is not the gate:** because of exactly that list. It runs *alongside*
+  the overlap threshold, not instead of it.
+
+## D-14 · The grounding gate refuses correct answers — Open, and it is the client's bug
+
+- **Source:** `adr/0016` §4, `docs/findings/w2-thresholds-measured-the-stub.md`
+- **Symptom:** a patient asking "what am I allergic to?" can be told the
+  assistant does not have that information. Measured: faithful answers score
+  0.481–0.600 on overlap against a 0.55 threshold, so roughly three in four are
+  withheld. The W4 patient view is withheld at a similar rate (0.467–0.522).
+- **Why it is still open:** three replacements were built and measured, and all
+  three were worse. `invented_clinical_claims` alone releases six fabrications.
+  A lower threshold cannot separate the populations — a flat contradiction scores
+  0.500, inside the faithful range. Requiring every clinical term to be supported
+  blocks the fabrications and refuses every real answer.
+- **What it needs:** sentence-level entailment against the source — does each
+  clinical assertion follow from a passage? That is model work, not a threshold.
+  `clinical_support()` and `unsupported_clinical_terms()` are shipped, measured
+  and unwired as groundwork.
+- **Meanwhile:** the gate stays strict. Of the two available failure modes —
+  releasing fabricated vital signs, or refusing correct answers — only one is
+  safe.

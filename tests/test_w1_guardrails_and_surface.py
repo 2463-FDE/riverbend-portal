@@ -1,5 +1,13 @@
 """W1 — output validation, the retention preflight, and the client-visible surface.
 
+The `check(..., strict_terms=False)` calls here are not a relaxation. W1 is a
+REWRITE path: turning "NPO x8h prior to phlebotomy" into "do not eat for eight
+hours before your blood draw" is the feature, so the stay-inside-the-source-
+vocabulary check that guards the SYNTHESIS paths does not apply (ADR 0016 §3).
+These tests make the same call `app.py` makes; invented dosages and medications
+are still withheld by `invented_clinical_claims`, which is what
+`test_invented_medication_is_withheld` covers.
+
 The guardrail tests exist because of one specific artifact: the contractor's
 transcript in which the summary invented a medication the patient was not taking.
 A mostly-faithful summary that adds "continue taking metformin 500mg" is MORE
@@ -32,14 +40,14 @@ SOURCE = (
 def test_faithful_summary_is_grounded():
     summary = ("Arrive fifteen minutes early, bring your insurance card and photo "
                "ID, and do not eat for eight hours before your blood draw.")
-    verdict = guardrails.check(summary, SOURCE, 0.55)
+    verdict = guardrails.check(summary, SOURCE, 0.55, strict_terms=False)
     assert verdict.grounded, f"faithful summary scored {verdict.score}: {verdict.reasons}"
 
 
 def test_ungrounded_summary_is_withheld():
     summary = ("Your mortgage application has been approved and the interest rate "
                "is locked for thirty years pending underwriter signature.")
-    verdict = guardrails.check(summary, SOURCE, 0.55)
+    verdict = guardrails.check(summary, SOURCE, 0.55, strict_terms=False)
     assert not verdict.grounded
     assert verdict.needs_review
 
@@ -57,7 +65,7 @@ def test_invented_medication_is_caught_despite_high_overlap():
         "eight hours before your blood draw, and continue taking your metformin "
         "500 mg as prescribed."
     )
-    verdict = guardrails.check(summary, SOURCE, 0.55)
+    verdict = guardrails.check(summary, SOURCE, 0.55, strict_terms=False)
     assert not verdict.grounded, "invented medication passed the guardrail"
     assert any(r.startswith("invented_medication") for r in verdict.reasons)
     assert any(r.startswith("invented_dosage") for r in verdict.reasons)
@@ -73,7 +81,7 @@ def test_invented_claim_fails_regardless_of_score():
 def test_dosage_present_in_source_is_not_flagged():
     source = "Take 500 mg of the prep solution at 8pm the night before."
     summary = "Take 500 mg of the prep solution the night before your procedure."
-    verdict = guardrails.check(summary, source, 0.4)
+    verdict = guardrails.check(summary, source, 0.4, strict_terms=False)
     assert verdict.grounded, f"a dosage quoted FROM the source is not invented: {verdict.reasons}"
 
 

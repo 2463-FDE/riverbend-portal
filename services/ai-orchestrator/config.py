@@ -80,6 +80,11 @@ class Settings:
 
     # --- guardrails (Tier 0: offline, free, always on) -------------------- #
     min_source_chars = _i("SUMMARY_MIN_SOURCE_CHARS", 20)
+    # REWRITE tasks only -- the W1 summariser, which restates ONE source in plain
+    # language. Output should closely track its input, so high overlap is the
+    # correct expectation. Measured live at 0.737 against real Bedrock.
+    #
+    # Do NOT use this for synthesis. See `min_answer_overlap` (ADR 0016 §3).
     grounding_threshold = _f("SUMMARY_GROUNDING_THRESHOLD", 0.55)
 
     # --- guardrails (Tier 1: Bedrock-managed, key/BAA-gated) -------------- #
@@ -116,6 +121,27 @@ class Settings:
 
     # --- RAG: retrieval ---------------------------------------------------- #
     retrieval_mode = os.getenv("RAG_RETRIEVAL_MODE", "hybrid")
+
+    @property
+    def semantic_fallback_enabled(self) -> bool:
+        """Is the dense score worth anything as a relevance signal?
+
+        Only under a real embedder. Measured, the offline hashed bag-of-terms
+        does not separate the two populations at all:
+
+            offline   relevant 0.107 .. 0.427   irrelevant 0.049 .. 0.295
+            titan     relevant 0.328 .. 0.706   irrelevant 0.047 .. 0.170
+
+        Under `offline` there is no threshold that admits relevant queries and
+        excludes off-topic ones, so the dense fallback is DISABLED and term
+        coverage is the sole gate -- which is what it was doing in practice
+        anyway.
+
+        Applying a Titan-calibrated number to the offline embedder would be the
+        same category error this ADR exists to correct: a threshold used against
+        a distribution it was never measured on.
+        """
+        return self.embed_backend == "titan" and not self.use_stub
     retrieve_k = _i("RAG_RETRIEVE_K", 4)
     hybrid_dense_weight = _f("RAG_HYBRID_DENSE_WEIGHT", 1.0)
     # Lexical is weighted up: clinic queries turn on exact tokens ("penicillin",
@@ -127,7 +153,42 @@ class Settings:
     # corpus-size independent; dense similarity is the paraphrase fallback. A
     # query must fail BOTH to be refused.
     min_term_coverage = _f("RAG_MIN_TERM_COVERAGE", 0.30)
-    min_semantic_score = _f("RAG_MIN_SEMANTIC_SCORE", 0.55)
+    # 0.25, not the original 0.55 (ADR 0016 §2). Calibrated against real Titan
+    # embeddings, measuring BOTH populations -- which is the part the first
+    # attempt at this number got wrong:
+    #
+    #     relevant queries    0.328 .. 0.706   (6 clinic + record questions)
+    #     irrelevant queries  0.047 .. 0.170   (6 off-topic questions)
+    #     old floor           0.55             -> refused every relevant query
+    #
+    # They separate cleanly, so 0.25 sits in the gap with margin either side.
+    #
+    # A first pass at this set 0.20 from the relevant distribution alone. That is
+    # not a calibration -- a floor needs the distribution it is meant to EXCLUDE
+    # as much as the one it must admit, and 0.20 left only 0.03 of headroom above
+    # the irrelevant maximum. The unit test that asserts an off-topic query never
+    # reaches the model caught it.
+    #
+    # RE-MEASURE when the embedding model changes, and measure both sides.
+    min_semantic_score = _f("RAG_MIN_SEMANTIC_SCORE", 0.25)
+
+    # Backstop only -- NOT the grounding gate (ADR 0016 §3). Term overlap cannot
+    # separate faithful answers from hallucinations: measured, faithful answers
+    # scored 0.176-0.521 and an answer that flatly contradicted its source scored
+    # 0.500. The release decision belongs to `invented_clinical_claims`.
+    #
+    # This floor catches only the degenerate case: an answer sharing almost no
+    # vocabulary with its own sources is off-topic even if it invents no drug.
+    # 0.15 is below the observed legitimate minimum of 0.176.
+    #
+    # Applies to SYNTHESIS tasks -- RAG answers and the W4 patient view -- where
+    # the output legitimately introduces framing vocabulary the sources do not
+    # contain ("conflicting", "clarify", "your healthcare provider"). Measured:
+    #
+    #     RAG answers          0.176 .. 0.521   (6 queries, none invented)
+    #     patient view         0.467 .. 0.522   (3 runs,    none invented)
+    #     old threshold        0.55             -> both false-refused
+    min_answer_overlap = _f("RAG_MIN_ANSWER_OVERLAP", 0.15)
 
     # --- RAG: quota discipline (RVB-W2-11) --------------------------------- #
     # Week 2 is flagged as a quota-risk week. Raise this deliberately, never by

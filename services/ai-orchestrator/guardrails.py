@@ -92,6 +92,91 @@ class Verdict:
         return not self.grounded
 
 
+# Discourse vocabulary: the words an answer adds to be USEFUL rather than to
+# assert anything clinical -- hedging, attribution, advice, and the machinery of
+# a sentence. Excluded from the support calculation.
+#
+# This list is the whole fix. `grounding_score` counts what fraction of the
+# OUTPUT's terms appear in the source, so an answer is penalised for every word
+# it adds -- and the words a careful answer adds are exactly these. Measured, it
+# scored faithful live answers 0.176-0.521 while scoring "You have no known drug
+# allergies" -- a flat contradiction built from source vocabulary -- at 0.500.
+#
+# Excluding discourse terms leaves the CLINICAL terms, which is what actually has
+# to be supported. See adr/0016 and docs/findings/w2-thresholds-measured-the-stub.md.
+_DISCOURSE = frozenset("""
+appear appears based clarify clarified confirm confirmed conflicting consult
+contains context different discuss doctor documented following found however
+indicate indicates indicating information listed multiple note noted provider
+provided providers question record records recorded regarding report reported
+require requires review reviewed same show showing shown shows similar specific
+staff suggest suggests unclear unable verify whether which while
+healthcare please should would could may might must need needs advised
+according additionally also although because before both cannot definitively
+either further given however instead means neither otherwise particularly
+rather since therefore though unless unfortunately unless whereas
+answer available currently details entry general history overall present
+question responses summary text passage passages source sources
+conflict conflicts differ differs disagree disagrees discrepancy inconsistent
+list lists listed mention mentions one two three several each other others
+appear appears seem seems there here this that these those across between
+date dated day month year time entry visit visits chart charts number numbers
+name named names naming call called known unknown per via within
+""".split())
+
+# The stoplist EXCLUDES terms from the support check, so a clinical word landing
+# in it would be a hole in the gate -- "pregnant" here would release "You are
+# pregnant". Pinned by `test_no_clinical_vocabulary_is_exempted`.
+
+
+# Citation markers. `[1]` tokenises to "1", and "1" occurs in almost any clinical
+# passage (chart 1042, a date, a dose), so an answer earned "support" for the act
+# of citing. Measured: it took "You are pregnant. [1]" from 0.000 to 0.500 --
+# every attack in the codex:rescue set was inflated by exactly this.
+_CITATION = re.compile(r"\[\s*\d+\s*\]")
+
+
+def clinical_terms(text: str) -> set:
+    """Content terms that assert something.
+
+    Discourse vocabulary and citation markers removed: neither asserts a clinical
+    fact, and both otherwise count toward support.
+    """
+    return {t for t in content_terms(_CITATION.sub(" ", text or ""))
+            if t not in _DISCOURSE}
+
+
+def clinical_support(output: str, source: str) -> float:
+    """Fraction of the output's CLINICAL terms that appear in the source.
+
+    The same direction as `grounding_score` -- how much of the output is
+    supported -- over the terms that carry clinical meaning rather than framing.
+
+    Why this and not the old score: an answer is no longer punished for saying
+    "you should clarify this with your provider", and it is no longer excused
+    because it reused the words "allergies" and "recorded". Every clinical noun,
+    drug, measurement and condition it introduces has to be in the source.
+
+    Measured on the same populations that broke the old metric:
+
+        faithful (hedged synthesis)        1.000
+        "You are pregnant"                 0.000
+        "blood pressure was 160/100"       0.000
+        "elevated A1C"                     0.000
+        "anaphylactic reaction"            0.500
+
+    Numbers are kept as terms deliberately: an invented vital sign or lab value
+    is a fabricated clinical fact, and dropping digits would make it invisible.
+    """
+    out_terms = clinical_terms(output)
+    if not out_terms:
+        # Pure framing with no clinical content asserts nothing to support. The
+        # refusal message itself lands here.
+        return 1.0
+    src_terms = content_terms(source)
+    return round(len(out_terms & src_terms) / len(out_terms), 4)
+
+
 def grounding_score(output: str, source: str) -> float:
     """Fraction of the output's content terms that appear in the source.
 
@@ -128,16 +213,78 @@ def invented_clinical_claims(output: str, source: str) -> list[str]:
     return sorted(set(reasons))
 
 
-def check(output: str, source: str, threshold: float) -> Verdict:
-    """Tier-0 validation. Fails closed: any invented claim fails outright."""
-    score = grounding_score(output, source)
-    reasons = invented_clinical_claims(output, source)
+def unsupported_clinical_terms(output: str, source: str) -> list[str]:
+    """Clinical terms the output asserts and the source does not contain.
 
+    **This is the gate** (ADR 0016 §3, revised after codex:rescue F1).
+
+    Not a fraction. `grounding_score` asked "what proportion of this is
+    supported?", which a partial fabrication passes easily by reusing real
+    vocabulary -- "You had an anaphylactic reaction to penicillin" is 2/3
+    supported and entirely invented. The question that matters is "is there
+    anything here the record does not say?", and the answer has to be no.
+
+    Verified against every adversarial case in the codex:rescue set, all of which
+    the fraction-based gate released:
+
+        "You are pregnant"                              -> pregnant
+        "Your blood pressure was 160/100"               -> blood, pressure, 160, 100
+        "Your lab results show elevated A1C"            -> a1c, elevat, lab, result
+        "anaphylactic reaction to penicillin"           -> anaphylactic, reaction
+        "sinus infection was caused by strep throat"    -> caus, strep, throat
+        "penicillin allergy has resolved"               -> resolv, longer, activ
+
+    **It fails CLOSED.** A word missing from `_DISCOURSE` produces a refusal,
+    never a release, so the failure mode of an incomplete stoplist is an
+    over-cautious assistant rather than a fabricated vital sign. That direction
+    is deliberate and is why the list is allowed to be imperfect.
+    """
+    return sorted(clinical_terms(output) - content_terms(source))
+
+
+def check(output: str, source: str, threshold: float,
+          *, strict_terms: bool = True) -> Verdict:
+    """Tier-0 validation. Fails closed.
+
+    Three checks, cheapest and most specific first:
+
+      1. invented medications, dosages and clinical directives -- pattern-based,
+         catches the classic "continue your metformin 500 mg" case;
+      2. any UNSUPPORTED CLINICAL TERM -- the general case, added after
+         codex:rescue showed check 1 alone released six fabrications;
+      3. a term-overlap floor, kept only as a coarse backstop for output that
+         shares almost no vocabulary with its sources.
+
+    `threshold` applies to check 3 only. It is deliberately no longer the
+    decision for synthesis: measured, faithful answers scored 0.176-0.521 on
+    overlap and a flat contradiction scored 0.500, so no value of it separates
+    the populations.
+
+    **`strict_terms=False` for REWRITE tasks.** Check 2 requires the output to
+    stay inside the source's vocabulary, which is right when the job is to report
+    what a record says and wrong when the job is to say it in plainer words. The
+    W1 summariser exists to turn "NPO x8h prior to phlebotomy" into "do not eat
+    for eight hours before your blood draw" -- introducing vocabulary is the
+    feature, so it keeps the fraction-based floor it was measured against (0.737
+    live, threshold 0.55) plus check 1, which is what withholds the invented
+    metformin dose.
+    """
+    score = grounding_score(output, source)
+
+    reasons = invented_clinical_claims(output, source)
     if reasons:
-        # An invented clinical fact fails REGARDLESS of overlap. This is the
-        # whole point of check 2: a mostly-faithful summary that adds a dose is
-        # the dangerous case, and it scores well.
         return Verdict(grounded=False, score=score, reasons=reasons)
+
+    unsupported = unsupported_clinical_terms(output, source) if strict_terms else []
+    if unsupported:
+        # Capped: the reason string reaches logs and API responses, and the terms
+        # are drawn from model output, which is not a place to be generous about
+        # length.
+        shown = ", ".join(unsupported[:6])
+        return Verdict(
+            grounded=False, score=score,
+            reasons=[f"unsupported_clinical_terms:{shown}"],
+        )
 
     if score < threshold:
         return Verdict(
