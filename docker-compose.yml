@@ -78,7 +78,19 @@ services:
       # POST /ai/knowledge/seed. See docs/runbook.md before relying on it.
       - chroma-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v2/heartbeat || exit 1"]
+      # The chroma 1.5.9 image ships NO curl and NO python, so the previous
+      # `curl -sf .../api/v2/heartbeat` could never succeed -- chroma sat
+      # permanently `unhealthy` while serving requests perfectly well.
+      #
+      # It did no damage only because ai-orchestrator waits on `service_started`
+      # rather than `service_healthy`. A healthcheck that can never pass is worse
+      # than none: it reports a false state, and the first thing to depend on it
+      # would deadlock.
+      #
+      # bash IS in the image, so /dev/tcp is the probe available to us. It proves
+      # the port is accepting connections rather than that the API is well --
+      # weaker than an HTTP 200, and stated as such rather than dressed up.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
       interval: 10s
       timeout: 3s
       retries: 5

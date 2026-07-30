@@ -82,15 +82,24 @@ here rather than implied by silence. An unstated gap reads as a covered one.
   non-zero and documents are committed anyway, the procedure is not working.
   That is measurable and currently unmeasured.
 
-## D-07 · Nothing in CI starts the stack — Open
+## D-07 · Nothing in CI starts the stack — CLOSED
 
 - **Source:** `docs/findings/w1ui-nothing-ever-ran-the-stack.md`
-- **What is missing:** a CI job running `docker compose up`, `make seed`,
-  `/healthz` on each service, `pytest -m integration`, and the Playwright
+- **Closed by:** the `stack-smoke` job in `.github/workflows/ci.yml`.
+- **What it does:** `docker compose up --wait` from a clean volume (which fails
+  the job if any container never reaches healthy — exactly what an unloadable
+  schema looks like), `/healthz` on all eight services plus the portal, `make
+  seed` followed by a real login, `pytest -m integration`, and the Playwright
   journeys.
 - **Why it matters:** three defects — an unloadable schema, a container-broken
   corpus path, and a live scope narrowing that hid a patient's penicillin
   allergy — survived 248 green tests because nothing ever ran the stack.
+- **Found while building it:** chroma's healthcheck shelled out to `curl`, which
+  is not in the image, so chroma sat permanently `unhealthy` while serving
+  requests fine. Harmless only because `ai-orchestrator` waits on
+  `service_started`; it would have deadlocked `--wait` and the first dependant to
+  ask for `service_healthy`. Now a `/dev/tcp` probe via the bash that IS in the
+  image — weaker than an HTTP 200, and labelled as such.
 
 ## D-08 · Route coverage for the `/ai/*` surface — Open
 
@@ -110,3 +119,14 @@ here rather than implied by silence. An unstated gap reads as a covered one.
   exactly one role and cannot express a capability.
 - **Not to be oversold:** this is not least-privilege. It is one narrow capability
   bolted beside a role model that cannot express capabilities.
+
+## D-10 · The Playwright gate is no longer opt-in — resolved with a caveat
+
+- **Source:** `adr/0013`, revisited
+- **What changed:** the journeys were gated behind `make up` because CI had no
+  stack. That was right then and stops being right now that `stack-smoke` exists —
+  an opt-in journey suite is a suite that does not run, and `#17` shipped claiming
+  a journey passed when it had never once executed.
+- **Caveat:** they still are not in the fast `frontend` job, so a pure-UI PR gets
+  its component feedback in ~1 minute and its journey feedback with the stack job.
+  That is a deliberate latency trade, not an exemption.

@@ -1,19 +1,197 @@
 # Riverbend — Demo Walkthrough
 
-Two ways to run this. Pick by audience.
+Two ways to run this. **The browser is the demo now.**
 
 | | Audience | Time | Needs |
 |---|---|---|---|
-| **A. Scripted demo** | Board, COO, anyone non-technical | ~4 min | Python only. No Docker, no AWS key, no spend. |
-| **B. Live stack** | Clinical leads, IT, anyone who wants to click | ~15 min | Docker. Still no AWS key. |
+| **A. The portal** | Anyone — this is the default | ~15 min | Docker. No AWS key, no spend. |
+| **B. The scripted fallback** | A room with no Docker, or a hostile network | ~4 min | Python only. |
 
-Both show the same four things. **A is the one to run in a board meeting** — it
-is deterministic, it cannot fail on stage, and every number in it is computed
-live from Riverbend's own handover data rather than typed into a slide.
+Path A used to be a list of `curl` commands, which is a fair description of what
+existed: four weeks shipped as gateway endpoints with **zero lines of
+`frontend/`**, and a terminal script let that go unnamed for a while. It is a
+browser walkthrough now because there is a browser to walk through.
+
+Keep B in your pocket. It is deterministic, it cannot fail on stage, and every
+number in it is computed live from Riverbend's own handover data rather than typed
+into a slide. But lead with A — *"can a person do this?"* is the question, and only
+A answers it.
+
+Everything runs in **stub mode**: no AWS key, no spend, on either path.
 
 ---
 
-## A. The scripted demo
+## A. The portal
+
+```bash
+make up            # postgres, redis, chroma, every service, the portal
+make seed          # schema + demo data
+open http://localhost:3070
+```
+
+| user | password | is |
+|---|---|---|
+| `maria.gonzalez` | `portal123` | patient, bound to chart 1042 |
+| `frontdesk` | `portal123` | staff, can add knowledge documents |
+| `rdelgado` | `portal123` | staff, second approver |
+
+### A1 — Log in as Maria, and look at what she can see *(~2 min)*
+
+Sign in as `maria.gonzalez`. Her dashboard opens with **Your complete record**.
+
+Point at three things, in this order:
+
+1. **"Your record is held across 3 charts at this clinic, and all of them are
+   included here."**
+2. Scroll to **Results and allergies**. It says *penicillin*.
+3. The sidebar. There is no Intake, no Release of Information, no Eligibility,
+   no Approvals.
+
+> *"She signed in as one chart. The system resolved her to three, because they are
+> the same person — and the allergy is on the chart her login is not attached to.
+> Before this, she would have seen a record that looked complete."*
+
+### A2 — The same record, seen by the clinic *(~3 min — this is the one they'll remember)*
+
+Open a second browser profile. Sign in as `frontdesk` and go to
+**Records → 1042**.
+
+Then open **Approvals**.
+
+> *"A clinician asking for Maria's assembled record does not get it immediately.
+> It is a merge of three charts, and materialising that merge is a disclosure
+> decision, so it waits for a person."*
+
+The queue row reads:
+
+> Release the record view for chart 1042, assembled across 3 charts, requested by
+> frontdesk.
+
+Point out that it says **what is being released**, not a run id.
+
+Now try to approve it as `frontdesk` — the person who asked for it:
+
+> **403** — this view was requested by you, someone else has to release it.
+
+Sign in as `rdelgado` and release it. The clinician now sees all three charts,
+including the penicillin allergy.
+
+> *"Two things there. The person who wants the record cannot be the person who
+> approves it. And until someone approved it, the record was assembled and not
+> returned — we checked that, because the first version handed it over anyway."*
+
+### A3 — Try to read someone else's chart *(~2 min)*
+
+Still as `maria.gonzalez`, go to **Records** and type `1043` — a different
+patient.
+
+> *"No records found for this patient."*
+
+Now type `999999`, which does not exist. **The same message.**
+
+> *"If unauthorized said 'forbidden' and missing said 'not found', you could probe
+> for which patient IDs exist. Both say the same thing."*
+
+The original capture is in `docs/handover/portal.har` — both of those requests
+returning **200** with a full chart. Worth opening side by side.
+
+### A4 — Ask the assistant, and watch it refuse *(~2 min)*
+
+Go to **Knowledge**. Ask:
+
+> How long must a patient fast before a blood draw?
+
+You get an answer with its **sources listed underneath**, and a line reading
+*Steps the assistant ran: retrieve → relevance gate → generate → ground gate →
+answer*.
+
+Now ask something the clinic has no policy on:
+
+> What is the clinic's policy on interplanetary travel reimbursement?
+
+> **No answer in scope.** The assistant found nothing relevant in the records it
+> is allowed to read. This is not an error, and it does not mean the answer is no.
+
+> *"That is the failure mode that matters. A system that guesses here is a system
+> that tells someone a patient has no allergies."*
+
+### A5 — Add a document, and read what you are about to publish *(~3 min)*
+
+Still on **Knowledge**, as `frontdesk`. Drop in any PDF.
+
+Nothing is indexed yet. You get a review screen that says:
+
+> **This will be readable by every patient.** Once added, this text can be
+> returned — with a citation — to anyone who asks the assistant a related
+> question, including patients.
+
+It shows the **exact text that will be indexed**, and what the scrubber removed.
+
+> *"The knowledge base has no per-patient filter, by design — clinic policy should
+> be answerable to whoever asks. Which means one document with a patient's name in
+> it becomes readable by every patient, indefinitely, with a citation. So it is
+> two steps, and the second one shows you the consequence rather than asking 'are
+> you sure'."*
+
+Press **Add**, then ask a question only that document answers. It comes back
+cited.
+
+Try dropping a `.docx`:
+
+> **DOCX files are not supported yet.** Save the document as a PDF and upload
+> that.
+
+> *"Not 'unsupported file type'. DOCX is a zip archive and zip handling deserves
+> its own review, so we said so instead of shipping it thin."*
+
+### A6 — The quality report *(~2 min)*
+
+**Knowledge → Answer quality → Run the evaluation.**
+
+Two tables, side by side:
+
+| Retrieval | | Record integrity | |
+|---|---|---|---|
+| Context recall | **1.000** | Fragment coverage | **0.556** |
+| Context precision | 1.000 | Duplicate patient rate | 0.333 |
+
+> *"Both true at the same time. The search finds the right chart every time. The
+> charts are the problem — one person is several records, so an assistant
+> answering from one of them is confidently incomplete."*
+
+Below it, named patients and chart ids: **Maria Gonzalez — 1042, 1330, 1588.**
+
+> *"0.556 is arguable. That row is not."*
+
+This screen is staff-only. Sign in as Maria and try it: *"This view is for clinic
+staff."*
+
+### A7 — Break the payer on purpose *(~2 min)*
+
+```bash
+docker compose stop eligibility-service
+```
+
+Go to **Eligibility** as `frontdesk`, check any member ID.
+
+> Could not verify · payer unreachable since
+>
+> Proceed with registration and mark coverage as unverified. Do not turn the
+> patient away — this is the last value we retrieved, not a denial.
+
+Now go to **Intake** and register a patient. It completes.
+
+```bash
+docker compose start eligibility-service
+```
+
+> *"On the Tuesday in question, that hung for nineteen minutes and nobody could
+> register anyone. Registration no longer waits on a third party — and notice the
+> screen says what to do, not just what happened."*
+
+---
+
+## B. The scripted fallback
 
 ```bash
 cd repos/riverbend-w1-w4
@@ -39,7 +217,7 @@ be shared with the model vendor and kept 30 days; for patient data that's a
 reportable disclosure. *"This isn't a policy document. It's a switch that won't
 turn on."*
 
-### Act 2 — One patient, three charts *(~90s — this is the one they'll remember)*
+### Act 2 — One patient, three charts *(~90s)*
 
 Prints Maria Gonzalez's three charts side by side. Same SSN, same address, same
 phone. The penicillin allergy is on the middle one.
@@ -99,113 +277,6 @@ material already approved. It is never asked who should see what."*
 
 ---
 
-## B. The live stack
-
-```bash
-make up                    # postgres, redis, chroma, all services, portal
-make seed                  # schema + demo data
-open http://localhost:3070
-```
-
-Everything runs in stub mode. **No AWS key, no spend.**
-
-### B1 — Log in as a patient
-
-| user | password | is |
-|---|---|---|
-| `maria.gonzalez` | `portal123` | patient, bound to chart 1042 |
-| `frontdesk` | `portal123` | staff |
-
-```bash
-TOKEN=$(curl -s localhost:8070/login -H 'Content-Type: application/json' \
-  -d '{"username":"maria.gonzalez","password":"portal123"}' | jq -r .token)
-
-curl -s localhost:8070/me -H "Authorization: Bearer $TOKEN" | jq
-```
-
-```json
-{ "username": "maria.gonzalez", "role": "patient", "patient_id": "1042",
-  "scope": { "principal": "patient", "patient_ids": [1042, 1330, 1588] } }
-```
-
-*"She logged in as one chart. The system resolved her to three, because they're
-the same person."*
-
-### B2 — The IDOR, then and now
-
-```bash
-curl -s -o /dev/null -w "own chart 1042 → %{http_code}\n" \
-  localhost:8070/patients/1042/records -H "Authorization: Bearer $TOKEN"
-
-curl -s -o /dev/null -w "someone else 1043 → %{http_code}\n" \
-  localhost:8070/patients/1043/records -H "Authorization: Bearer $TOKEN"
-
-curl -s -o /dev/null -w "nonexistent 999999 → %{http_code}\n" \
-  localhost:8070/patients/999999/records -H "Authorization: Bearer $TOKEN"
-```
-
-```
-own chart 1042 → 200
-someone else 1043 → 404
-nonexistent 999999 → 404
-```
-
-**Point at the last two being identical.** *"If unauthorized returned 403 and
-missing returned 404, you could probe for which patient IDs exist. Both say the
-same thing."*
-
-The original capture is in `docs/handover/portal.har` — both requests returning
-200. Worth opening side by side.
-
-### B3 — The assembled patient view
-
-```bash
-curl -s localhost:8070/ai/patient-view/1042 -H "Authorization: Bearer $TOKEN" | jq '.summary, .path'
-```
-
-Point at `path`: `authorize → plan → retrieve:demographics → retrieve:encounters
-→ retrieve:labs → retrieve:coverage → sensitivity_gate → synthesize`.
-
-*"Authorize is first. The four retrievals run in parallel. The model call is
-last, and only ever sees what authorize approved."*
-
-### B4 — The knowledge base and the duplicate finding
-
-```bash
-STAFF=$(curl -s localhost:8070/login -H 'Content-Type: application/json' \
-  -d '{"username":"frontdesk","password":"portal123"}' | jq -r .token)
-
-curl -s -XPOST localhost:8070/ai/knowledge/eval \
-  -H "Authorization: Bearer $STAFF" -d '{}' | jq -r .report
-```
-
-Prints the full eval report — retrieval quality first, data integrity second, the
-identity split, and the clinically-incomplete answer.
-
-```bash
-curl -s localhost:8070/ai/knowledge/identity-clusters \
-  -H "Authorization: Bearer $STAFF" | jq '.clusters[] | select(.fragmented)'
-```
-
-### B5 — Break the payer on purpose
-
-```bash
-docker compose stop eligibility-service
-curl -s -w "\nregistration took %{time_total}s\n" -XPOST localhost:8070/intake \
-  -H "Authorization: Bearer $STAFF" -H 'Content-Type: application/json' \
-  -d '{"demographics":{"name":"Demo Patient","dob":"1980-01-01","created_via":"front_desk"},
-       "insurance":{"payer_name":"ACME","member_id":"BCBS4471"},"consents":["npp_ack"]}'
-docker compose start eligibility-service
-```
-
-Registration returns **201** with `"status": "pending"`, in well under a second,
-with the eligibility service completely stopped.
-
-*"Before this change, that request would have hung. On the Tuesday in question,
-for nineteen minutes, it hung for everyone."*
-
----
-
 ## Questions you should expect
 
 **"Can we turn this on for real patients tomorrow?"**
@@ -248,4 +319,5 @@ week's fix sound bigger than it is.
 | **76 / 76 registrations** | Act 3 replay | "During a nineteen-minute outage" |
 | **404 vs 404** | `GET /patients/1043` vs `/999999` | "Nobody can probe for real IDs" |
 | **0 records loaded** | Act 4 | "Never read, not hidden afterwards" |
-| **231 tests, $0** | `make test` | "Green without an AI key" |
+| **340 tests, $0** | `make test` | "Green without an AI key" |
+| **14 browser journeys** | `npm run test:e2e` | "A person doing it, not an API answering" |

@@ -13,8 +13,14 @@ mode, so what you see is the SYSTEM's behaviour, not a model's improvisation.
   Act 3  Nineteen minutes when nobody could register a patient
   Act 4  Any login could read any chart
 
-Run it with the stack up (`make up`) for the browser walkthrough in
-docs/showcase/DEMO.md; this script is the version that fits in a meeting.
+**This is the FALLBACK, not the demo.** The demo is the portal --
+`docs/showcase/DEMO.md` Path A, in a browser, with `make up`.
+
+Keep this for a room with no Docker or a hostile network: it is deterministic and
+cannot fail on stage. But it answers "does the system behave correctly?", not "can
+a person do this?", and for a while it was allowed to stand in for the second
+question while `frontend/` had zero lines in it. Leading with it again would be
+the same mistake.
 """
 import os
 import sys
