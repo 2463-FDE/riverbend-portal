@@ -5,3 +5,6 @@ redis==5.2.1
 pydantic==2.10.4
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.10
+
+# adr/0014 — multipart upload proxying for knowledge ingest.
+python-multipart==0.0.20

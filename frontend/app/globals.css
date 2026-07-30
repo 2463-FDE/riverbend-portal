@@ -1014,3 +1014,201 @@ textarea:focus-visible,
   margin: 16px 0;
   border: none;
 }
+
+/* ==========================================================================
+   W2 (2/2) — agent answers, ingest preview, quality report.
+
+   Extends the existing token set; no new palette, no new primitives. Every
+   colour below resolves to a --rb-* already defined above (RVB-U-01).
+   ========================================================================== */
+
+.rb-alert__body {
+  margin: 4px 0 0;
+  font-weight: 400;
+}
+
+/* The answer itself. Slightly larger than body copy because it is the thing the
+   page exists to show, and it sits under a qualifier that must not out-weigh it. */
+.rb-answer {
+  font-size: 0.98rem;
+  line-height: 1.6;
+  color: var(--rb-text);
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+}
+
+.rb-lede {
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: var(--rb-text);
+  margin: 0;
+}
+
+/* Citations render INLINE with the answer (ADR 0015 rule 2). Styled as a
+   readable list rather than a collapsed footnote strip -- if it looks like
+   chrome, it gets skipped, and the grounding is the safety argument. */
+.rb-citations {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  border-top: 1px solid var(--rb-border);
+}
+.rb-citation {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rb-border);
+  font-size: 0.86rem;
+}
+.rb-citation__marker {
+  color: var(--rb-primary-dark);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.rb-citation__title {
+  flex: 1 1 auto;
+  color: var(--rb-text);
+}
+.rb-citation__score {
+  flex: 0 0 auto;
+  color: var(--rb-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The graph path, standing in for a spinner (ADR 0015 rule 3). */
+.rb-path {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--rb-surface-alt);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-sm);
+  font-size: 0.8rem;
+}
+.rb-path__label {
+  color: var(--rb-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+.rb-path__steps {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: none;
+}
+.rb-path__step {
+  color: var(--rb-primary-darker);
+  background: var(--rb-primary-tint);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.rb-path__step + .rb-path__step::before {
+  content: "→";
+  color: var(--rb-text-faint);
+  margin-right: 8px;
+  margin-left: -4px;
+}
+
+/* Ingest */
+.rb-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rb-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--rb-text-muted);
+  margin-bottom: 4px;
+}
+.rb-fieldset {
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-sm);
+  padding: 10px 12px;
+  margin: 0 0 14px;
+}
+.rb-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 18px;
+  font-size: 0.88rem;
+}
+
+/* The preview pane. Monospace and scrollable on purpose: this is the artifact
+   under review, and it must be legible as text rather than as prose. */
+.rb-preview {
+  max-height: 340px;
+  overflow: auto;
+  background: var(--rb-surface-alt);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-sm);
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rb-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 0.86rem;
+}
+.rb-meta dt {
+  color: var(--rb-text-muted);
+  font-weight: 600;
+}
+.rb-meta dd {
+  margin: 0;
+  color: var(--rb-text);
+}
+
+.rb-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  color: var(--rb-text-muted);
+}
+
+.rb-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rb-h4 {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--rb-text);
+  margin: 0 0 8px;
+}
+.rb-h5 {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--rb-text-muted);
+  margin: 12px 0 6px;
+}
+
+/* Quality report */
+.rb-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+.rb-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}

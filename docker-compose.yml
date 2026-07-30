@@ -38,6 +38,14 @@ services:
       INTEROP_URL: http://interop-service:8075
       ROI_URL: http://roi-service:8076
       AI_ORCHESTRATOR_URL: http://ai-orchestrator:8077
+      # W2 knowledge-ingest capability (services/gateway/authz.py). An interim
+      # control until the role hierarchy lands (D7, W9): the inherited system has
+      # exactly one role and cannot express a capability, so the allowlist is
+      # env-driven. Demo default grants the front-desk lead; production sets the
+      # real list. Empty here would make the ingest gate untestable end-to-end,
+      # which is how a control ships unexercised.
+      KNOWLEDGE_INGEST_USERS: "${KNOWLEDGE_INGEST_USERS:-frontdesk,rdelgado}"
+      KNOWLEDGE_INGEST_ROLES: "${KNOWLEDGE_INGEST_ROLES:-knowledge_admin}"
     ports:
       - "8070:8070"
     depends_on:
@@ -90,6 +98,10 @@ services:
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
       RAG_EMBED_BACKEND: "${RAG_EMBED_BACKEND:-offline}"
+      # adr/0014 — the two-phase ingest gate stages pre-commit document text
+      # here. That text is explicitly NOT de-identified, so staging.py encrypts
+      # it with LANGGRAPH_AES_KEY, the same key path as the checkpointer.
+      REDIS_URL: "redis://redis:6379/0"
     ports:
       - "8077:8077"
     volumes:
@@ -98,6 +110,8 @@ services:
       - ./db/seed:/seed:ro
     depends_on:
       chroma:
+        condition: service_started
+      redis:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8077/healthz')\""]
